@@ -1,0 +1,182 @@
+[
+  {
+    "file": "backscan_l1.rs",
+    "original": "crates/searcher/src/lines.rs::preceding_by_pos",
+    "level": 1
+  },
+  {
+    "file": "backscan_l2.rs",
+    "original": "crates/searcher/src/lines.rs::preceding_by_pos",
+    "level": 2
+  },
+  {
+    "file": "backscan_l3.rs",
+    "original": "crates/searcher/src/lines.rs::preceding_by_pos",
+    "level": 3
+  },
+  {
+    "file": "bracket_meta_l1.rs",
+    "original": "crates/globset/src/lib.rs::escape",
+    "level": 1
+  },
+  {
+    "file": "bracket_meta_l2.rs",
+    "original": "crates/globset/src/lib.rs::escape",
+    "level": 2
+  },
+  {
+    "file": "bracket_meta_l3.rs",
+    "original": "crates/globset/src/lib.rs::escape",
+    "level": 3
+  },
+  {
+    "file": "bytesize_l1.rs",
+    "original": "crates/cli/src/human.rs::parse_human_readable_size",
+    "level": 1
+  },
+  {
+    "file": "bytesize_l2.rs",
+    "original": "crates/cli/src/human.rs::parse_human_readable_size",
+    "level": 2
+  },
+  {
+    "file": "bytesize_l3.rs",
+    "original": "crates/cli/src/human.rs::parse_human_readable_size",
+    "level": 3
+  },
+  {
+    "file": "css_token_flatten_l1.ts",
+    "original": "packages/shared/src/normalizeProp.ts::normalizeClass",
+    "level": 1
+  },
+  {
+    "file": "css_token_flatten_l2.ts",
+    "original": "packages/shared/src/normalizeProp.ts::normalizeClass",
+    "level": 2
+  },
+  {
+    "file": "css_token_flatten_l3.ts",
+    "original": "packages/shared/src/normalizeProp.ts::normalizeClass",
+    "level": 3
+  },
+  {
+    "file": "cursor_line_tracker_l1.ts",
+    "original": "packages/compiler-core/src/utils.ts::advancePositionWithMutation",
+    "level": 1
+  },
+  {
+    "file": "cursor_line_tracker_l2.ts",
+    "original": "packages/compiler-core/src/utils.ts::advancePositionWithMutation",
+    "level": 2
+  },
+  {
+    "file": "cursor_line_tracker_l3.ts",
+    "original": "packages/compiler-core/src/utils.ts::advancePositionWithMutation",
+    "level": 3
+  },
+  {
+    "file": "deep_value_match_l1.ts",
+    "original": "packages/shared/src/looseEqual.ts::looseEqual",
+    "level": 1
+  },
+  {
+    "file": "deep_value_match_l2.ts",
+    "original": "packages/shared/src/looseEqual.ts::looseEqual",
+    "level": 2
+  },
+  {
+    "file": "deep_value_match_l3.ts",
+    "original": "packages/shared/src/looseEqual.ts::looseEqual",
+    "level": 3
+  },
+  {
+    "file": "didyoumean_l1.rs",
+    "original": "crates/core/flags/parse.rs::find_similar_names",
+    "level": 1
+  },
+  {
+    "file": "didyoumean_l2.rs",
+    "original": "crates/core/flags/parse.rs::find_similar_names",
+    "level": 2
+  },
+  {
+    "file": "didyoumean_l3.rs",
+    "original": "crates/core/flags/parse.rs::find_similar_names",
+    "level": 3
+  },
+  {
+    "file": "gitconf_probe_l1.rs",
+    "original": "crates/ignore/src/gitignore.rs::parse_excludes_file",
+    "level": 1
+  },
+  {
+    "file": "gitconf_probe_l2.rs",
+    "original": "crates/ignore/src/gitignore.rs::parse_excludes_file",
+    "level": 2
+  },
+  {
+    "file": "gitconf_probe_l3.rs",
+    "original": "crates/ignore/src/gitignore.rs::parse_excludes_file",
+    "level": 3
+  },
+  {
+    "file": "leadspace_l1.rs",
+    "original": "crates/printer/src/util.rs::trim_ascii_prefix",
+    "level": 1
+  },
+  {
+    "file": "leadspace_l2.rs",
+    "original": "crates/printer/src/util.rs::trim_ascii_prefix",
+    "level": 2
+  },
+  {
+    "file": "leadspace_l3.rs",
+    "original": "crates/printer/src/util.rs::trim_ascii_prefix",
+    "level": 3
+  },
+  {
+    "file": "octetsub_l1.rs",
+    "original": "crates/searcher/src/line_buffer.rs::replace_bytes",
+    "level": 1
+  },
+  {
+    "file": "octetsub_l2.rs",
+    "original": "crates/searcher/src/line_buffer.rs::replace_bytes",
+    "level": 2
+  },
+  {
+    "file": "octetsub_l3.rs",
+    "original": "crates/searcher/src/line_buffer.rs::replace_bytes",
+    "level": 3
+  },
+  {
+    "file": "stable_chain_indices_l1.ts",
+    "original": "packages/runtime-core/src/renderer.ts::getSequence",
+    "level": 1
+  },
+  {
+    "file": "stable_chain_indices_l2.ts",
+    "original": "packages/runtime-core/src/renderer.ts::getSequence",
+    "level": 2
+  },
+  {
+    "file": "stable_chain_indices_l3.ts",
+    "original": "packages/runtime-core/src/renderer.ts::getSequence",
+    "level": 3
+  },
+  {
+    "file": "worktree_shared_l1.rs",
+    "original": "crates/ignore/src/dir.rs::resolve_git_commondir",
+    "level": 1
+  },
+  {
+    "file": "worktree_shared_l2.rs",
+    "original": "crates/ignore/src/dir.rs::resolve_git_commondir",
+    "level": 2
+  },
+  {
+    "file": "worktree_shared_l3.rs",
+    "original": "crates/ignore/src/dir.rs::resolve_git_commondir",
+    "level": 3
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "_comment": "Template for `semdup calibrate --labels`. Replace with pairs from YOUR repo: selectors are 'path-suffix::function-name' (suffix just needs to be unambiguous). Label dup=true if you would want a review comment on the pair; dup=false for intentional parallelism (mirrors, per-variant impls). Aim for ~10 of each; hard negatives matter most.",
+  "pairs": [
+    { "a": "globset/src/lib.rs::escape", "b": "search/quote.rs::quote_pattern", "dup": true },
+    { "a": "cli/src/human.rs::parse_human_readable_size", "b": "config/limits.rs::read_quota", "dup": true },
+    { "a": "cache/store.rs::cache_read", "b": "cache/store.rs::cache_write", "dup": false },
+    { "a": "backend/cpu.rs::run_kernel", "b": "backend/gpu.rs::run_kernel", "dup": false }
+  ]
+}

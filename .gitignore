@@ -1,0 +1,6 @@
+/target
+*.sqlite
+/eval/corpus/
+/models/
+scan*.md
+scan*.json
