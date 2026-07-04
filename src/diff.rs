@@ -9,8 +9,8 @@
 //! and house style dominate the embedding. So this mode makes no cleverness
 //! claims: it prints each touched function's nearest neighbors as evidence
 //! for the reviewer, and the only automated verdicts come from the
-//! per-repo calibrated threshold:
-//!   DUP    — top cosine at or above the calibrated threshold
+//! user's per-repo threshold:
+//!   DUP    — top cosine at or above the threshold
 //!   REVIEW — within REVIEW_BAND below it (worth a look, doesn't fail --check)
 //!
 //! Run from the repo root the corpus was extracted from, after `extract` +
@@ -29,13 +29,13 @@ use crate::embed::{Backend, strip_doc_comments};
 use crate::extract::{self, Unit};
 use crate::scan::dot;
 
-/// How far below the calibrated threshold still earns a REVIEW tag.
+/// How far below the threshold still earns a REVIEW tag.
 const REVIEW_BAND: f32 = 0.05;
 
 pub struct DiffOpts<'a> {
     pub base: String,
     pub min_lines: usize,
-    /// Calibrated threshold for a hard DUP verdict; None disables it.
+    /// Threshold for a hard DUP verdict; None disables it.
     pub threshold: Option<f32>,
     pub json: Option<&'a Path>,
     pub skip_tests: bool,

@@ -4,11 +4,10 @@
 //! -> embedding (built-in ONNX Runtime backend, or a python sidecar for
 //! arbitrary models) -> exact pairwise cosine -> clustered report.
 //! Suppression: put `semdup:ignore` in a comment on, or up to three lines
-//! above, the function signature. Thresholds are derived per repo and model
-//! with `semdup calibrate`, never hand-configured.
+//! above, the function signature. Thresholds are per repo and per model:
+//! dial one in by running `scan` at a few values against your own code.
 
 mod baseline;
-mod calibrate;
 mod config;
 mod db;
 mod diff;
@@ -73,7 +72,7 @@ enum Cmd {
     Scan {
         #[arg(long)]
         model: Option<String>,
-        /// Cosine threshold; derive with `semdup calibrate`.
+        /// Cosine threshold; dial in by trying a few values on your repo.
         #[arg(long)]
         threshold: Option<f32>,
         /// Ignore units shorter than this many lines.
@@ -102,7 +101,7 @@ enum Cmd {
         base: String,
         #[arg(long)]
         min_lines: Option<usize>,
-        /// Calibrated threshold for DUP/REVIEW verdicts; omit for evidence-only output.
+        /// Threshold for DUP/REVIEW verdicts; omit for evidence-only output.
         #[arg(long)]
         threshold: Option<f32>,
         #[arg(long)]
@@ -115,14 +114,6 @@ enum Cmd {
         #[command(flatten)]
         embed: EmbedArgs,
     },
-    /// Score a labeled pair file and suggest a threshold for a model.
-    Calibrate {
-        #[arg(long)]
-        model: Option<String>,
-        /// JSON: {"positives": [["path::name","path::name"],..], "negatives": [..]}
-        #[arg(long)]
-        labels: PathBuf,
-    },
     /// Measure recall of planted semantics-preserving rewrites.
     InjectEval {
         #[arg(long)]
@@ -132,6 +123,9 @@ enum Cmd {
         manifest: PathBuf,
         #[arg(long)]
         min_lines: Option<usize>,
+        /// Exit nonzero if any level's recall@5 falls below this (for CI).
+        #[arg(long)]
+        min_recall5: Option<f32>,
     },
     /// Print unit/embedding counts.
     Status,
@@ -232,7 +226,7 @@ fn main() -> Result<()> {
         } => {
             let model = resolve_model(model, &cfg)?;
             let threshold = threshold.or(cfg.scan.threshold).context(
-                "no threshold (--threshold or [scan].threshold; derive with `semdup calibrate`)",
+                "no threshold given (--threshold or [scan].threshold in semdup.toml)",
             )?;
             let opts = scan::ScanOpts {
                 threshold,
@@ -268,14 +262,11 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Cmd::Calibrate { model, labels } => {
-            let model = resolve_model(model, &cfg)?;
-            calibrate::run(&conn, &model, &labels)?;
-        }
         Cmd::InjectEval {
             model,
             manifest,
             min_lines,
+            min_recall5,
         } => {
             let model = resolve_model(model, &cfg)?;
             inject::run(
@@ -283,6 +274,7 @@ fn main() -> Result<()> {
                 &model,
                 &manifest,
                 min_lines.or(cfg.scan.min_lines).unwrap_or(5),
+                min_recall5,
             )?;
         }
         Cmd::Status => db::print_status(&conn)?,

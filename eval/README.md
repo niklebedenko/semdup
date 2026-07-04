@@ -42,33 +42,26 @@ entry. Keep one primary function per file (the largest unit in the file is
 taken as the plant), don't reuse the original's name, and pick originals
 ≥ 12 lines with real logic, not boilerplate.
 
-## 2. Threshold calibration (`semdup calibrate`)
+## 2. Picking a threshold
 
-Measures where *your* repo's duplicate/not-duplicate boundary sits for a
-given model. You label real pairs from your own code, and calibrate sweeps
-thresholds to maximize balanced accuracy.
+Thresholds are per-repo *and* per-model: different codebases have different
+vocabulary overlap, and different models place the same pairs differently.
+There is no command for this because the honest procedure is judgment, not
+optimization — sweep a few values on your own code and keep the one whose
+report you would actually act on:
 
 ```bash
-cp eval/labels.example.json labels.json   # then edit: label your own pairs
-semdup calibrate --model <MODEL> --labels labels.json
+for t in 0.55 0.60 0.65 0.70 0.75; do
+  semdup scan --model <MODEL> --threshold $t --skip-tests | tail -1
+done
 ```
 
-Labeling guidance:
-
-- Pull candidates from a permissive `semdup scan --threshold 0.5` run, plus
-  a few pairs you already know about.
-- `"dup": true` — you would want a review comment on this pair (copy-paste,
-  re-implementation, divergent twins).
-- `"dup": false` — similar-looking but intentionally parallel (read/write
-  mirrors, per-variant impls, API boilerplate). These hard negatives are the
-  valuable ones; ~10 of each class is enough to locate the boundary.
-- Selectors are `path-suffix::name`; the suffix only needs to be unambiguous.
-
-Calibration is per-repo *and* per-model: different codebases have different
-vocabulary overlap, and different models place the same pairs differently.
-Re-run after switching models. If calibrate reports a mushy optimum (wide
-plateau, poor balanced accuracy), don't gate CI on the threshold at all —
-use `semdup diff` without `--check` and read its neighbor evidence by hand.
+Then read the report at your candidate value: the boundary you're placing is
+between real duplication and *intentional* parallelism (read/write mirrors,
+per-variant implementations), and only you know which side a pair belongs
+on. Re-sweep after switching models. If no value gives a report you trust,
+don't gate CI on a threshold at all — use `semdup diff` without `--check`
+and read its neighbor evidence by hand.
 
 ## Corpus provenance
 

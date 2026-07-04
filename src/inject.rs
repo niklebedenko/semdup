@@ -18,7 +18,13 @@ struct PlantEntry {
     level: u8,
 }
 
-pub fn run(conn: &Connection, model: &str, manifest_path: &Path, min_lines: usize) -> Result<()> {
+pub fn run(
+    conn: &Connection,
+    model: &str,
+    manifest_path: &Path,
+    min_lines: usize,
+    min_recall5: Option<f32>,
+) -> Result<()> {
     let manifest: Vec<PlantEntry> =
         serde_json::from_str(&std::fs::read_to_string(manifest_path)?)?;
     let main: Vec<(UnitRow, Vec<f32>)> = db::load_units(conn, "main", model)?
@@ -97,16 +103,24 @@ pub fn run(conn: &Connection, model: &str, manifest_path: &Path, min_lines: usiz
     println!("|---|---|---|---|---|---|");
     let mut levels: Vec<_> = agg.into_iter().collect();
     levels.sort_by_key(|&(l, _)| l);
+    let mut worst_recall5 = f32::INFINITY;
     for (level, (n, r1, r5, cos_sum, margin_sum)) in levels {
+        let recall5 = r5 as f32 / n as f32;
+        worst_recall5 = worst_recall5.min(recall5);
         println!(
             "| {} | {} | {:.2} | {:.2} | {:.4} | {:+.4} |",
             level,
             n,
             r1 as f32 / n as f32,
-            r5 as f32 / n as f32,
+            recall5,
             cos_sum / n as f32,
             margin_sum / n as f32,
         );
+    }
+    if let Some(min) = min_recall5
+        && worst_recall5 < min
+    {
+        bail!("recall@5 {worst_recall5:.2} at the worst level is below --min-recall5 {min:.2}");
     }
     Ok(())
 }

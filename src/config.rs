@@ -43,7 +43,7 @@ pub struct Embed {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Scan {
-    /// Cosine threshold. Derive with `semdup calibrate`; don't hand-tune.
+    /// Cosine threshold; per repo and per model, so dial it in on your own code.
     pub threshold: Option<f32>,
     pub min_lines: Option<usize>,
     pub skip_tests: Option<bool>,

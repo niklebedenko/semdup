@@ -6,13 +6,13 @@ implementations of the same logic — across files, modules, and languages.
 
 - **Local-first.** Embeddings run on your machine (built-in ONNX Runtime
   backend, CPU or CUDA). Your code never leaves the box.
-- **Calibrated, not configured.** Thresholds are *derived* per repo and per
-  model by `semdup calibrate` and a planted-clone benchmark — never copied
-  from a README (including this one).
+- **Thresholds are yours, per repo and per model.** Dial one in by running
+  `scan` at a few values against your own code and seeing where the reports
+  stop being useful — never copy one from a README (including this one).
 - **Evidence over verdicts.** For merge requests, `semdup diff` shows each
-  touched function's nearest corpus neighbors and applies only your
-  calibrated threshold (a hard `DUP` fails `--check`; a `REVIEW` band just
-  below it is advisory). No uncalibrated cleverness — see caveat 1.
+  touched function's nearest corpus neighbors and applies only your chosen
+  threshold (a hard `DUP` fails `--check`; a `REVIEW` band just below it is
+  advisory). No hidden cleverness — see caveat 1.
 - Rust and TypeScript today; one tree-sitter grammar + ~30 lines per
   additional language.
 
@@ -33,9 +33,9 @@ Two honest caveats, both baked into the design:
    as a planted rewrite's original — we measured this, and no
    neighbor-closeness statistic we tried (top-1 margin, mutual nearest
    neighbor, z-score against the similarity background) separates them.
-   That's why calibration is a first-class command, and why `semdup diff`
-   presents ranked evidence instead of pretending to a judgment it can't
-   make.
+   That's why thresholds are a per-repo preference you sweep for yourself,
+   and why `semdup diff` presents ranked evidence instead of pretending to
+   a judgment it can't make.
 2. **Detection ≠ judgment.** In real codebases the mid-similarity band is
    full of *intentional* parallelism (read/write mirrors, per-variant
    implementations, cpu/gpu backends). semdup gives you the evidence;
@@ -80,14 +80,17 @@ semdup embed --model-dir models/coderankembed --model nomic-ai/CodeRankEmbed
 # 2. Look at the obvious stuff first: near-exact clones
 semdup scan --model nomic-ai/CodeRankEmbed --threshold 0.95 --skip-tests
 
-# 3. Calibrate a real threshold for YOUR repo (label ~20 pairs; see eval/)
-semdup calibrate --model nomic-ai/CodeRankEmbed --labels labels.json
+# 3. Dial in a threshold: sweep a few values, keep the one whose report
+#    you'd act on (expect somewhere in 0.55-0.75 for code-retrieval models)
+for t in 0.55 0.60 0.65 0.70 0.75; do
+  semdup scan --model nomic-ai/CodeRankEmbed --threshold $t --skip-tests | tail -1
+done
 
 # 4. Adopt without triaging history: snapshot today's pairs, report only new ones
 semdup scan --model nomic-ai/CodeRankEmbed --threshold 0.625 --write-baseline semdup-baseline.json
 semdup scan --model nomic-ai/CodeRankEmbed --threshold 0.625 --baseline semdup-baseline.json
 
-# 5. Review merge requests with neighbor evidence + your calibrated threshold
+# 5. Review merge requests with neighbor evidence + your chosen threshold
 semdup diff --base origin/main --model nomic-ai/CodeRankEmbed --model-dir models/coderankembed --threshold 0.625 --check
 ```
 
@@ -106,7 +109,7 @@ backend = "onnx"
 model_dir = "models/coderankembed"
 
 [scan]
-threshold = 0.625   # derived by `semdup calibrate`, not hand-picked
+threshold = 0.625   # yours will differ: sweep a few values on your own repo
 min_lines = 8
 skip_tests = true
 baseline = "semdup-baseline.json"
@@ -153,13 +156,13 @@ similarity). Test functions are tagged at extraction and excluded with
   promote the winner to ONNX.
 
 Vectors are cached by `(model id, content hash)`; swapping models means a
-cold cache and a fresh `calibrate` — by design, since every threshold is
+cold cache and a fresh threshold sweep — by design, since every threshold is
 model-specific.
 
 ### Choosing a model
 
-Run the bake-off yourself; it's one command per candidate (`calibrate` +
-`inject-eval`). On our benchmarks, **nomic-ai/CodeRankEmbed** (137M params)
+Run the bake-off yourself; it's one `inject-eval` per candidate. On our
+benchmarks, **nomic-ai/CodeRankEmbed** (137M params)
 beat embedding models 4× its size on class separation — code-contrastive
 training matters more than scale. Expect newer models to win eventually;
 that's what the harness is for.
@@ -171,15 +174,17 @@ corpora (ripgrep + vuejs/core, pinned SHAs):
 
 ```bash
 eval/fetch-corpus.sh
-semdup extract --root eval/corpus
+semdup extract --root eval/corpus --corpus main
+semdup extract --root eval/injected --corpus injected
 semdup embed --model-dir models/coderankembed --model nomic-ai/CodeRankEmbed
-semdup inject-eval --model nomic-ai/CodeRankEmbed --manifest eval/manifest.json
+semdup inject-eval --model nomic-ai/CodeRankEmbed --manifest eval/manifest.json --min-recall5 0.9
 ```
 
 This measures recall@1/@5 of planted rewrites at three mutation levels
 (rename-only / restructured / re-derived) — the numbers that tell you whether
 a model actually works before you trust its scan output. See `eval/README.md`
-for labeling your own calibration pairs.
+for the methodology and for extending the benchmark. CI runs this end-to-end
+on every PR (CPU, cached model) and gates on recall@5 ≥ 0.9.
 
 ## Status
 

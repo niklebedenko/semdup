@@ -21,3 +21,70 @@ jobs:
       - run: cargo test
       # The default feature set pulls ONNX Runtime; make sure the slim build works too.
       - run: cargo check --no-default-features
+
+  # Full pipeline on CPU against the pinned public corpora: export model →
+  # extract → embed → planted-clone recall. Gated behind lints/tests.
+  e2e:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+
+      # The ONNX export is deterministic in (model pin, export script), so
+      # cache the exported directory; the cold path costs a torch install
+      # plus a ~500 MB model download.
+      - name: Cache exported model
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: models/coderankembed
+          key: onnx-model-${{ hashFiles('scripts/export_onnx.py') }}-coderankembed-v1
+      - uses: actions/setup-python@v5
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        with:
+          python-version: '3.12'
+      - name: Export model (cache miss)
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet sentence-transformers onnx onnxruntime einops
+          python3 scripts/export_onnx.py --model nomic-ai/CodeRankEmbed --out models/coderankembed
+
+      # Embeddings are cached by (model, content hash), so a stale DB is
+      # harmless — only new/changed units re-embed.
+      - name: Cache embedding DB
+        uses: actions/cache@v4
+        with:
+          path: semdup.sqlite
+          key: embed-db-${{ hashFiles('scripts/export_onnx.py', 'eval/fetch-corpus.sh') }}-${{ github.run_id }}
+          restore-keys: embed-db-${{ hashFiles('scripts/export_onnx.py', 'eval/fetch-corpus.sh') }}-
+
+      - name: Fetch pinned corpora
+        run: eval/fetch-corpus.sh
+      - name: Extract + embed (CPU)
+        run: |
+          target/release/semdup extract --root eval/corpus --corpus main
+          target/release/semdup extract --root eval/injected --corpus injected
+          target/release/semdup embed --backend onnx --model-dir models/coderankembed --model nomic-ai/CodeRankEmbed
+      - name: Planted-clone recall gate
+        run: |
+          set -o pipefail  # tee must not mask a failed gate
+          target/release/semdup inject-eval --model nomic-ai/CodeRankEmbed \
+            --manifest eval/manifest.json --min-recall5 0.9 | tee eval-report.md
+          tail -6 eval-report.md >> "$GITHUB_STEP_SUMMARY"
+      # Diff smoke test: pretend a PR adds a rename-only clone of globset's
+      # escape(); its original must surface as the touched unit's top
+      # neighbor (rank is the robust assertion — absolute cosines are not).
+      - name: Diff smoke test
+        run: |
+          cp eval/injected/bracket_meta_l1.rs src/ci_smoke_plant.rs
+          git add src/ci_smoke_plant.rs   # git diff only sees tracked files
+          out=$(target/release/semdup diff --base HEAD --model nomic-ai/CodeRankEmbed \
+            --backend onnx --model-dir models/coderankembed)
+          echo "$out"
+          git rm -q --cached src/ci_smoke_plant.rs && rm src/ci_smoke_plant.rs
+          echo "$out" | grep -A1 'ci_smoke_plant\.rs' | grep -q 'globset/src/lib\.rs.* escape$' || {
+            echo "expected escape() as the plant's top neighbor"; exit 1; }
