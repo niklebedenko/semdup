@@ -87,6 +87,10 @@ enum Cmd {
         /// Cap the number of clusters printed.
         #[arg(long, default_value_t = 50)]
         top: usize,
+        /// Only report clusters with at least this many members (rule of
+        /// three: pass 3 to see only logic that already exists 3+ times).
+        #[arg(long)]
+        min_cluster: Option<usize>,
         /// Suppress pairs recorded in this baseline file.
         #[arg(long)]
         baseline: Option<PathBuf>,
@@ -221,6 +225,7 @@ fn main() -> Result<()> {
             skip_tests,
             json,
             top,
+            min_cluster,
             baseline,
             write_baseline,
         } => {
@@ -234,6 +239,7 @@ fn main() -> Result<()> {
                 skip_tests: skip_tests || cfg.scan.skip_tests.unwrap_or(false),
                 json: json.as_deref(),
                 top,
+                min_cluster: min_cluster.or(cfg.scan.min_cluster).unwrap_or(2),
                 baseline: baseline.as_deref().or(cfg.scan.baseline.as_deref()),
                 write_baseline: write_baseline.as_deref(),
             };

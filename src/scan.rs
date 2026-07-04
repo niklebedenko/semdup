@@ -22,6 +22,9 @@ pub struct ScanOpts<'a> {
     pub skip_tests: bool,
     pub json: Option<&'a Path>,
     pub top: usize,
+    /// Only report clusters with at least this many members ("rule of three"
+    /// gating: a helper is only worth it once the logic exists N times).
+    pub min_cluster: usize,
     pub baseline: Option<&'a Path>,
     /// Instead of reporting, write all pairs above threshold to this baseline file.
     pub write_baseline: Option<&'a Path>,
@@ -82,30 +85,44 @@ pub fn run(conn: &Connection, model: &str, opts: &ScanOpts) -> Result<()> {
             .or_default()
             .push((i, j, s));
     }
-    let mut ordered: Vec<_> = clusters.into_values().collect();
-    for c in &mut ordered {
-        c.sort_by(|a, b| b.2.total_cmp(&a.2));
-    }
-    ordered.sort_by(|a, b| b[0].2.total_cmp(&a[0].2));
+    let mut ordered: Vec<Cluster> = clusters
+        .into_values()
+        .map(|mut c| {
+            c.sort_by(|a, b| b.2.total_cmp(&a.2));
+            let mut members: Vec<usize> = c.iter().flat_map(|&(i, j, _)| [i, j]).collect();
+            members.sort_unstable();
+            members.dedup();
+            Cluster { members, pairs: c }
+        })
+        .collect();
+    ordered.sort_by(|a, b| b.pairs[0].2.total_cmp(&a.pairs[0].2));
+    let total_clusters = ordered.len();
+    ordered.retain(|c| c.members.len() >= opts.min_cluster);
+    let kept_pairs: usize = ordered.iter().map(|c| c.pairs.len()).sum();
 
     println!(
         "# semdup scan — model {model}, threshold {}\n",
         opts.threshold
     );
     println!(
-        "{} pairs above threshold in {} clusters\n",
-        pairs.len(),
+        "{} pairs above threshold in {} clusters",
+        kept_pairs,
         ordered.len()
     );
+    if ordered.len() < total_clusters {
+        println!(
+            "({} clusters below --min-cluster {} hidden)",
+            total_clusters - ordered.len(),
+            opts.min_cluster
+        );
+    }
+    println!();
     for (k, cluster) in ordered.iter().take(opts.top).enumerate() {
-        let mut members: Vec<usize> = cluster.iter().flat_map(|&(i, j, _)| [i, j]).collect();
-        members.sort_unstable();
-        members.dedup();
-        println!("## cluster {} ({} members)", k + 1, members.len());
-        for &m in &members {
+        println!("## cluster {} ({} members)", k + 1, cluster.members.len());
+        for &m in &cluster.members {
             println!("- {}", units[m].0.label());
         }
-        for &(i, j, s) in cluster.iter().take(10) {
+        for &(i, j, s) in cluster.pairs.iter().take(10) {
             println!("  {s:.4}  {}  <->  {}", units[i].0.name, units[j].0.name);
         }
         println!();
@@ -115,8 +132,9 @@ pub fn run(conn: &Connection, model: &str, opts: &ScanOpts) -> Result<()> {
     }
 
     if let Some(path) = opts.json {
-        let out: Vec<PairOut> = pairs
+        let out: Vec<PairOut> = ordered
             .iter()
+            .flat_map(|c| &c.pairs)
             .map(|&(i, j, s)| PairOut {
                 a: units[i].0.label(),
                 b: units[j].0.label(),
@@ -127,6 +145,11 @@ pub fn run(conn: &Connection, model: &str, opts: &ScanOpts) -> Result<()> {
         eprintln!("wrote {} pairs to {}", out.len(), path.display());
     }
     Ok(())
+}
+
+struct Cluster {
+    members: Vec<usize>,
+    pairs: Vec<(usize, usize, f32)>,
 }
 
 pub fn load_scannable(

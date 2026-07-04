@@ -47,6 +47,8 @@ pub struct Scan {
     pub threshold: Option<f32>,
     pub min_lines: Option<usize>,
     pub skip_tests: Option<bool>,
+    /// Only report clusters with at least this many members.
+    pub min_cluster: Option<usize>,
     /// Baseline file of known pairs to suppress.
     pub baseline: Option<PathBuf>,
 }

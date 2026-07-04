@@ -80,6 +80,10 @@ semdup embed --model-dir models/coderankembed --model nomic-ai/CodeRankEmbed
 # 2. Look at the obvious stuff first: near-exact clones
 semdup scan --model nomic-ai/CodeRankEmbed --threshold 0.95 --skip-tests
 
+# Rule-of-three mode: only clusters where the logic already exists 3+ times
+# (the strongest candidates for extracting a shared helper)
+semdup scan --model nomic-ai/CodeRankEmbed --threshold 0.85 --skip-tests --min-cluster 3
+
 # 3. Dial in a threshold: sweep a few values, keep the one whose report
 #    you'd act on (expect somewhere in 0.55-0.75 for code-retrieval models)
 for t in 0.55 0.60 0.65 0.70 0.75; do
@@ -112,6 +116,7 @@ model_dir = "models/coderankembed"
 threshold = 0.625   # yours will differ: sweep a few values on your own repo
 min_lines = 8
 skip_tests = true
+# min_cluster = 3   # rule of three: only report 3+-member clusters
 baseline = "semdup-baseline.json"
 ```
 
