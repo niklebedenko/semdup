@@ -5,10 +5,8 @@
 [extract]
 roots = ["src", "scripts", "sidecar"]
 
-[embed]
-model = "nomic-ai/CodeRankEmbed"
-backend = "onnx"
-model_dir = "models/coderankembed"
+# No [embed] section: the default model (nomic-ai/CodeRankEmbed) is
+# auto-downloaded into the user cache on first use, both locally and in CI.
 
 [scan]
 # Swept on this repo 2026-07-04: the one real pair sits at 0.756 and the

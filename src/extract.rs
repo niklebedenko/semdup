@@ -37,6 +37,13 @@ const DEFAULT_EXCLUDES: &[&str] = &[
 
 const IGNORE_DIRECTIVE: &str = "semdup:ignore";
 
+/// File extensions `extract_file` knows how to parse (see the language table
+/// there for how each maps to a grammar).
+pub const SUPPORTED_EXTS: &[&str] = &[
+    "rs", "ts", "tsx", "py", "go", "java", "cs", "php", "rb", "c", "h", "cpp", "cc", "cxx", "hpp",
+    "hh", "hxx",
+];
+
 pub fn extract_roots(
     roots: &[PathBuf],
     extra_excludes: &[String],
@@ -72,27 +79,11 @@ fn collect_files(dir: &Path, extra_excludes: &[String], out: &mut Vec<PathBuf>) 
         }
         if path.is_dir() {
             collect_files(&path, extra_excludes, out)?;
-        } else if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some(
-                "rs" | "ts"
-                    | "tsx"
-                    | "py"
-                    | "go"
-                    | "java"
-                    | "cs"
-                    | "php"
-                    | "rb"
-                    | "c"
-                    | "h"
-                    | "cpp"
-                    | "cc"
-                    | "cxx"
-                    | "hpp"
-                    | "hh"
-                    | "hxx"
-            )
-        ) {
+        } else if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| SUPPORTED_EXTS.contains(&e))
+        {
             out.push(path);
         }
     }

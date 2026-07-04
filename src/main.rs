@@ -13,6 +13,10 @@ mod db;
 mod diff;
 mod embed;
 mod extract;
+// Only the onnx backend downloads models; slim builds still use DEFAULT_MODEL.
+#[cfg_attr(not(feature = "onnx"), allow(dead_code))]
+mod fetch;
+mod init;
 mod inject;
 mod scan;
 
@@ -55,6 +59,18 @@ struct EmbedArgs {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Set up this repo: detect roots, write semdup.toml, fetch the model,
+    /// build the first index.
+    Init {
+        /// Accept all defaults without prompting.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Re-extract the configured roots and embed anything new or changed.
+    Refresh {
+        #[command(flatten)]
+        embed: EmbedArgs,
+    },
     /// Parse source trees and (re)build the unit table for a corpus.
     Extract {
         /// Root directories to walk for supported source files.
@@ -79,8 +95,11 @@ enum Cmd {
     },
     /// Report near-duplicate clusters above a cosine threshold.
     Scan {
+        /// Skip the automatic re-index of configured roots before scanning.
         #[arg(long)]
-        model: Option<String>,
+        no_refresh: bool,
+        #[command(flatten)]
+        embed: EmbedArgs,
         /// Cosine threshold; dial in by trying a few values on your repo.
         #[arg(long)]
         threshold: Option<f32>,
@@ -145,20 +164,21 @@ enum Cmd {
 }
 
 fn resolve_model(cli: Option<String>, cfg: &Config) -> Result<String> {
-    cli.or_else(|| cfg.embed.model.clone())
-        .context("no model given (--model or [embed].model in semdup.toml)")
+    Ok(cli
+        .or_else(|| cfg.embed.model.clone())
+        .unwrap_or_else(|| fetch::DEFAULT_MODEL.to_string()))
 }
 
 /// Build the embedding backend from CLI + config. Sidecar needs a script;
-/// onnx needs a model dir; the default backend is onnx when a model_dir is
-/// known, else sidecar.
+/// onnx needs a model dir or the default model (auto-downloaded); the
+/// default backend is onnx when the feature is compiled in, else sidecar.
 fn make_backend(args: &EmbedArgs, cfg: &Config, model: &str) -> Result<Box<dyn embed::Backend>> {
     let backend = args
         .backend
         .clone()
         .or_else(|| cfg.embed.backend.clone())
         .unwrap_or_else(|| {
-            if args.model_dir.is_some() || cfg.embed.model_dir.is_some() {
+            if cfg!(feature = "onnx") {
                 "onnx".into()
             } else {
                 "sidecar".into()
@@ -167,11 +187,16 @@ fn make_backend(args: &EmbedArgs, cfg: &Config, model: &str) -> Result<Box<dyn e
     match backend.as_str() {
         #[cfg(feature = "onnx")]
         "onnx" => {
-            let dir = args
+            // Explicit model_dir wins; otherwise the default model is
+            // downloaded into the user cache on first use (fetch.rs).
+            let dir = match args
                 .model_dir
                 .clone()
                 .or_else(|| cfg.embed.model_dir.clone())
-                .context("onnx backend needs --model-dir (see scripts/export_onnx.py)")?;
+            {
+                Some(d) => d,
+                None => fetch::ensure_default_model(model)?,
+            };
             Ok(Box::new(embed::onnx::Onnx::load(&dir)?))
         }
         #[cfg(not(feature = "onnx"))]
@@ -192,6 +217,26 @@ fn make_backend(args: &EmbedArgs, cfg: &Config, model: &str) -> Result<Box<dyn e
     }
 }
 
+/// Re-extract the configured roots into the "main" corpus and embed anything
+/// the cache is missing. Shared by `init`, `refresh`, and `scan`'s
+/// auto-refresh.
+fn refresh(conn: &rusqlite::Connection, cfg: &Config, args: &EmbedArgs) -> Result<()> {
+    let roots = cfg
+        .extract
+        .roots
+        .clone()
+        .context("no roots configured (run `semdup init` or set [extract].roots)")?;
+    let excludes = cfg.extract.exclude.clone().unwrap_or_default();
+    let strip = cfg.extract.strip_comments.unwrap_or(false);
+    let units = extract::extract_roots(&roots, &excludes, strip)?;
+    eprintln!("indexed {} units", units.len());
+    db::replace_corpus(conn, "main", &units)?;
+    let model = resolve_model(args.model.clone(), cfg)?;
+    let mut backend = make_backend(args, cfg, &model)?;
+    embed::run(conn, &model, backend.as_mut())?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::discover(&std::env::current_dir()?)?;
@@ -203,6 +248,21 @@ fn main() -> Result<()> {
     let conn = db::open(&db_path)?;
 
     match cli.cmd {
+        Cmd::Init { yes } => {
+            let dir = std::env::current_dir()?;
+            init::run(&dir, yes)?;
+            // Re-discover: the wizard just wrote the config this run indexes with.
+            let cfg = Config::discover(&dir)?;
+            let args = EmbedArgs {
+                model: None,
+                backend: None,
+                model_dir: None,
+                script: None,
+            };
+            refresh(&conn, &cfg, &args)?;
+            eprintln!("\nready — run `semdup scan` to see near-duplicate clusters");
+        }
+        Cmd::Refresh { embed: args } => refresh(&conn, &cfg, &args)?,
         Cmd::Extract {
             root,
             corpus,
@@ -231,7 +291,8 @@ fn main() -> Result<()> {
             embed::run(&conn, &model, backend.as_mut())?;
         }
         Cmd::Scan {
-            model,
+            no_refresh,
+            embed: args,
             threshold,
             min_lines,
             skip_tests,
@@ -241,10 +302,15 @@ fn main() -> Result<()> {
             baseline,
             write_baseline,
         } => {
-            let model = resolve_model(model, &cfg)?;
+            // Keep the index current unless told not to; repos driving
+            // extract/embed explicitly (no configured roots) scan as-is.
+            if !no_refresh && cfg.extract.roots.is_some() {
+                refresh(&conn, &cfg, &args)?;
+            }
+            let model = resolve_model(args.model.clone(), &cfg)?;
             let threshold = threshold
                 .or(cfg.scan.threshold)
-                .context("no threshold given (--threshold or [scan].threshold in semdup.toml)")?;
+                .context("no threshold given (--threshold, or run `semdup init`)")?;
             let opts = scan::ScanOpts {
                 threshold,
                 min_lines: min_lines.or(cfg.scan.min_lines).unwrap_or(5),
