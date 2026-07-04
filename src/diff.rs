@@ -1,12 +1,17 @@
 //! Per-MR mode: rank functions touched by a diff against the indexed corpus.
 //!
-//! Absolute cosine thresholds are fragile (identifier vocabulary dominates
-//! the embedding), but *relative* similarity is robust: in our planted-clone
-//! benchmark the true original was the touched function's nearest neighbor in
-//! 90% of cases, with positive margin. So this mode reports, per touched
-//! function, its nearest corpus neighbors and flags:
-//!   DUP    — cosine above the calibrated threshold, or
-//!   LIKELY — the pair is a mutual nearest neighbor with a clear margin.
+//! Design note, from planted-clone measurements (see eval/): rewrites rank
+//! their original at top-1..5 reliably, but no *neighbor-closeness* statistic
+//! we tested (top-1 margin, mutual nearest neighbor, z-score of the top hit
+//! against the unit's similarity background) separates rewrites from ordinary
+//! code — in a real repo the median function's nearest neighbor is as
+//! "anomalously close" as a planted rewrite's original, because vocabulary
+//! and house style dominate the embedding. So this mode makes no cleverness
+//! claims: it prints each touched function's nearest neighbors as evidence
+//! for the reviewer, and the only automated verdicts come from the
+//! per-repo calibrated threshold:
+//!   DUP    — top cosine at or above the calibrated threshold
+//!   REVIEW — within REVIEW_BAND below it (worth a look, doesn't fail --check)
 //!
 //! Run from the repo root the corpus was extracted from, after `extract` +
 //! `embed` on the base state (stale corpora degrade gracefully: results are
@@ -24,7 +29,8 @@ use crate::embed::{Backend, strip_doc_comments};
 use crate::extract::{self, Unit};
 use crate::scan::dot;
 
-const MUTUAL_NN_MARGIN: f32 = 0.03;
+/// How far below the calibrated threshold still earns a REVIEW tag.
+const REVIEW_BAND: f32 = 0.05;
 
 pub struct DiffOpts<'a> {
     pub base: String,
@@ -49,7 +55,7 @@ struct Report {
     neighbors: Vec<Neighbor>,
 }
 
-/// Returns the number of DUP/LIKELY findings (for CI exit codes).
+/// Returns the number of DUP findings (for CI exit codes).
 pub fn run(
     conn: &Connection,
     model: &str,
@@ -104,19 +110,17 @@ pub fn run(
         if scored.is_empty() {
             continue;
         }
-        let (nn_idx, cos1) = scored[0];
+        let (_, cos1) = scored[0];
         let cos2 = scored.get(1).map_or(0.0, |&(_, s)| s);
         let margin = cos1 - cos2;
 
-        let above = opts.threshold.is_some_and(|t| cos1 >= t);
-        let verdict = if above {
-            "DUP"
-        } else if margin >= MUTUAL_NN_MARGIN && is_mutual_nn(&corpus, nn_idx, cos1) {
-            "LIKELY"
-        } else {
-            "ok"
+        let verdict = match opts.threshold {
+            Some(t) if cos1 >= t => "DUP",
+            Some(t) if cos1 >= t - REVIEW_BAND => "REVIEW",
+            _ => "ok",
         };
-        if verdict != "ok" {
+        // Only hard DUPs fail --check; REVIEW is advisory.
+        if verdict == "DUP" {
             findings += 1;
         }
         reports.push(Report {
@@ -160,19 +164,6 @@ fn paths_equal(a: &str, b: &str) -> bool {
     a == b
         || (a.len() > b.len() && a.ends_with(b) && a.as_bytes()[a.len() - b.len() - 1] == b'/')
         || (b.len() > a.len() && b.ends_with(a) && b.as_bytes()[b.len() - a.len() - 1] == b'/')
-}
-
-/// True if `cos1` beats the neighbor's best similarity to anyone else in the
-/// corpus — i.e. the touched unit and the neighbor point at each other.
-fn is_mutual_nn(corpus: &[(UnitRow, Vec<f32>)], nn_idx: usize, cos1: f32) -> bool {
-    let (nn_unit, nn_vec) = &corpus[nn_idx];
-    let best_other = corpus
-        .iter()
-        .enumerate()
-        .filter(|&(i, (c, _))| i != nn_idx && !(c.path == nn_unit.path && c.name == nn_unit.name))
-        .map(|(_, (_, v))| dot(nn_vec, v))
-        .fold(f32::NEG_INFINITY, f32::max);
-    cos1 > best_other
 }
 
 /// Extract functions in the working tree that overlap changed lines vs `base`.

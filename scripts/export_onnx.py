@@ -3,8 +3,14 @@
 
 Produces <out>/model.onnx, <out>/tokenizer.json, <out>/semdup-model.json.
 The exported graph takes (input_ids, attention_mask) int64 [batch, seq] and
-returns last_hidden_state float32 [batch, seq, dim]; semdup applies masked
-mean pooling + L2 normalization on its side, mirroring sentence-transformers.
+returns the finished embedding float32 [batch, dim] — pooling (cls or masked
+mean, per the model's sentence-transformers config) and L2 normalization are
+baked into the graph so they run on the GPU and only dim floats per text
+cross back to the host.
+
+--fp16 exports half-precision weights (embeds ~2x faster on GPU; requires
+CUDA at export time). The default fp32 export is the right choice for
+CPU-only use.
 
 After export this script verifies the ONNX model against the original at
 several sequence lengths (rotary-embedding models can trace incorrectly for
@@ -36,6 +42,7 @@ def main():
     # trace + the cache pre-warm below verifies bit-exact for CodeRankEmbed;
     # the dynamo/torch.export path currently fails on it (batch-dim guard bug).
     ap.add_argument("--exporter", choices=["trace", "dynamo"], default="trace")
+    ap.add_argument("--fp16", action="store_true", help="half-precision weights (GPU)")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -64,23 +71,37 @@ def main():
     print(f"pooling: {pooling}")
 
     class Wrapper(torch.nn.Module):
-        def __init__(self, m):
+        def __init__(self, m, pooling):
             super().__init__()
             self.m = m
+            self.pooling = pooling
 
         def forward(self, input_ids, attention_mask):
             out = self.m(input_ids=input_ids, attention_mask=attention_mask)
-            return out.last_hidden_state if hasattr(out, "last_hidden_state") else out[0]
+            hidden = out.last_hidden_state if hasattr(out, "last_hidden_state") else out[0]
+            if self.pooling == "cls":
+                emb = hidden[:, 0]
+            else:
+                m = attention_mask.unsqueeze(-1).to(hidden.dtype)
+                emb = (hidden * m).sum(1) / m.sum(1).clamp(min=1e-9)
+            # Pool in model dtype, hand back fp32 unit vectors either way.
+            return torch.nn.functional.normalize(emb.float(), dim=-1)
 
-    wrapper = Wrapper(transformer)
+    device = "cpu"
+    if args.fp16:
+        if not torch.cuda.is_available():
+            raise SystemExit("--fp16 requires CUDA at export time")
+        device = "cuda"
+        transformer = transformer.half()
+    wrapper = Wrapper(transformer, pooling).to(device)
 
     # Pre-warm rotary/position caches to max_seq so no cache-growth branch is
     # taken while exporting (the branch is untraceable control flow).
     with torch.no_grad():
-        warm = torch.randint(100, 1000, (1, max_seq), dtype=torch.int64)
+        warm = torch.randint(100, 1000, (1, max_seq), dtype=torch.int64, device=device)
         wrapper(warm, torch.ones_like(warm))
 
-    ex_ids = torch.randint(100, 1000, (2, 37), dtype=torch.int64)
+    ex_ids = torch.randint(100, 1000, (2, 37), dtype=torch.int64, device=device)
     ex_mask = torch.ones_like(ex_ids)
     ex_mask[1, 30:] = 0
 
@@ -92,11 +113,11 @@ def main():
         (ex_ids, ex_mask),
         str(out / "model.onnx"),
         input_names=["input_ids", "attention_mask"],
-        output_names=["last_hidden_state"],
+        output_names=["embedding"],
         dynamic_axes={
             "input_ids": {0: "batch", 1: "seq"},
             "attention_mask": {0: "batch", 1: "seq"},
-            "last_hidden_state": {0: "batch", 1: "seq"},
+            "embedding": {0: "batch"},
         },
         opset_version=args.opset,
         dynamo=args.exporter == "dynamo",
@@ -105,11 +126,20 @@ def main():
     (out / "tokenizer.json").write_bytes((out / "_tok" / "tokenizer.json").read_bytes())
     (out / "semdup-model.json").write_text(
         json.dumps(
-            {"model": args.model, "max_seq": max_seq, "dim": dim, "pooling": pooling},
+            {
+                "model": args.model,
+                "max_seq": max_seq,
+                "dim": dim,
+                "pooling": pooling,
+                "fp16": args.fp16,
+            },
             indent=2,
         )
     )
-    print(f"exported to {out} (max_seq {max_seq}, dim {dim}, pooling {pooling})")
+    print(
+        f"exported to {out} (max_seq {max_seq}, dim {dim}, pooling {pooling}, "
+        f"{'fp16' if args.fp16 else 'fp32'})"
+    )
 
     # --- verification at several lengths ---
     import onnxruntime as onnxrt
@@ -131,18 +161,13 @@ def main():
         ids = enc["input_ids"].astype(np.int64)
         mask = enc["attention_mask"].astype(np.int64)
         outputs = sess.run(None, {in_names[0]: ids, in_names[1]: mask})
-        hidden = outputs[0]
-        if pooling == "cls":
-            pooled = hidden[0][0]
-        else:
-            m = mask[0][:, None].astype(np.float32)
-            pooled = (hidden[0] * m).sum(0) / m.sum()
-        pooled = pooled / np.linalg.norm(pooled)
+        pooled = outputs[0][0]
         cos = float(np.dot(ref, pooled))
         worst = min(worst, cos)
         print(f"  len {ids.shape[1]:5d}  cos(onnx, reference) = {cos:.6f}")
-    if worst < 0.999:
-        raise SystemExit(f"VERIFICATION FAILED: worst cosine {worst:.6f} < 0.999")
+    gate = 0.998 if args.fp16 else 0.999
+    if worst < gate:
+        raise SystemExit(f"VERIFICATION FAILED: worst cosine {worst:.6f} < {gate}")
     print(f"verification OK (worst cosine {worst:.6f})")
 
 

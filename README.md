@@ -9,9 +9,10 @@ implementations of the same logic — across files, modules, and languages.
 - **Calibrated, not configured.** Thresholds are *derived* per repo and per
   model by `semdup calibrate` and a planted-clone benchmark — never copied
   from a README (including this one).
-- **Rank over threshold.** For gating merge requests, `semdup diff` flags
-  touched functions whose nearest corpus neighbor is anomalously close —
-  robust where absolute cosine cutoffs are fragile.
+- **Evidence over verdicts.** For merge requests, `semdup diff` shows each
+  touched function's nearest corpus neighbors and applies only your
+  calibrated threshold (a hard `DUP` fails `--check`; a `REVIEW` band just
+  below it is advisory). No uncalibrated cleverness — see caveat 1.
 - Rust and TypeScript today; one tree-sitter grammar + ~30 lines per
   additional language.
 
@@ -27,9 +28,14 @@ time.
 Two honest caveats, both baked into the design:
 
 1. **Identifier vocabulary dominates embeddings.** A rename-only clone can
-   score *below* two unrelated functions that share jargon. Absolute
-   thresholds are therefore fragile — which is why calibration is a
-   first-class command and why `semdup diff` uses rank + margin instead.
+   score *below* two unrelated functions that share jargon, and in a real
+   repo the median function's nearest neighbor looks as "anomalously close"
+   as a planted rewrite's original — we measured this, and no
+   neighbor-closeness statistic we tried (top-1 margin, mutual nearest
+   neighbor, z-score against the similarity background) separates them.
+   That's why calibration is a first-class command, and why `semdup diff`
+   presents ranked evidence instead of pretending to a judgment it can't
+   make.
 2. **Detection ≠ judgment.** In real codebases the mid-similarity band is
    full of *intentional* parallelism (read/write mirrors, per-variant
    implementations, cpu/gpu backends). semdup gives you the evidence;
@@ -41,6 +47,18 @@ Two honest caveats, both baked into the design:
 cargo install semdup                 # CPU inference
 cargo install semdup --features cuda # CUDA execution provider (falls back to CPU)
 ```
+
+The CUDA path needs cuDNN 9 on the library path at runtime (semdup prints a
+loud warning and falls back to CPU otherwise). If you have a CUDA build of
+torch installed, its bundled copy works:
+
+```bash
+export LD_LIBRARY_PATH=$(python3 -c 'import nvidia.cudnn,os;print(os.path.dirname(nvidia.cudnn.__file__)+"/lib")')
+```
+
+For GPU use, export the model with `--fp16` (about 2× embed throughput; the
+verification gate still applies). A ~6k-function corpus embeds cold in ~30 s
+on a midrange GPU; incremental runs only touch changed functions.
 
 Get an embedding model directory (one-time; needs python with torch +
 sentence-transformers + onnx + onnxruntime):
@@ -69,8 +87,8 @@ semdup calibrate --model nomic-ai/CodeRankEmbed --labels labels.json
 semdup scan --model nomic-ai/CodeRankEmbed --threshold 0.625 --write-baseline semdup-baseline.json
 semdup scan --model nomic-ai/CodeRankEmbed --threshold 0.625 --baseline semdup-baseline.json
 
-# 5. Gate merge requests on rank, not threshold
-semdup diff --base origin/main --model nomic-ai/CodeRankEmbed --model-dir models/coderankembed --check
+# 5. Review merge requests with neighbor evidence + your calibrated threshold
+semdup diff --base origin/main --model nomic-ai/CodeRankEmbed --model-dir models/coderankembed --threshold 0.625 --check
 ```
 
 Persistent settings live in `semdup.toml` at the repo root (discovered by
@@ -114,12 +132,12 @@ don't. Use ignores for permanent design decisions, baselines for "not today."
 extract   tree-sitter → function units → SQLite (content-hash keyed)
 embed     ONNX Runtime (CUDA→CPU) or python sidecar → cached vectors
 scan      exact pairwise cosine (rayon) → union-find clusters → report
-diff      git diff → touched units → nearest-neighbor rank + margin
+diff      git diff → touched units → top-3 neighbors + threshold verdicts
 ```
 
 There is no approximate index: on an 8k-function corpus a full scan is one
-parallel matmul, ~0.3 s. Embedding the whole corpus cold is minutes; after
-that only changed functions re-embed.
+parallel matmul, ~0.3 s. Embedding the whole corpus cold is minutes on CPU
+and tens of seconds on a GPU; after that only changed functions re-embed.
 
 Doc comments are stripped before embedding (shared doc boilerplate inflates
 similarity). Test functions are tagged at extraction and excluded with

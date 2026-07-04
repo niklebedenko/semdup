@@ -1,13 +1,13 @@
 //! Built-in ONNX Runtime backend.
 //!
 //! Loads a model directory produced by `scripts/export_onnx.py`:
-//!   model.onnx         — encoder taking (input_ids, attention_mask) -> last_hidden_state
+//!   model.onnx         — (input_ids, attention_mask) -> embedding [batch, dim];
+//!                        pooling + L2 normalization are baked into the graph
 //!   tokenizer.json     — HF fast tokenizer
 //!   semdup-model.json  — { "max_seq": .., "dim": .. }
 //!
 //! Uses the CUDA execution provider when the crate is built with `--features
-//! cuda` and a GPU is present; otherwise falls back to CPU. Pooling is masked
-//! mean + L2 normalize, matching the sentence-transformers reference.
+//! cuda` and a GPU is present; otherwise falls back to CPU.
 
 use std::path::Path;
 
@@ -23,13 +23,6 @@ use super::Backend;
 struct ModelMeta {
     max_seq: usize,
     dim: usize,
-    /// "cls" or "mean", from the model's sentence-transformers pooling config.
-    #[serde(default = "default_pooling")]
-    pooling: String,
-}
-
-fn default_pooling() -> String {
-    "mean".into()
 }
 
 pub struct Onnx {
@@ -52,12 +45,25 @@ impl Onnx {
             use ort::execution_providers::{CUDAExecutionProvider, ExecutionProvider};
             let cuda = CUDAExecutionProvider::default();
             if cuda.is_available()? {
-                eprintln!("onnx backend: CUDA execution provider");
-                // The error variant carries the (non-Send) builder; format it
-                // instead of `?`-converting to anyhow.
-                builder = builder
-                    .with_execution_providers([cuda.build()])
-                    .map_err(|e| anyhow::anyhow!("registering CUDA EP: {e}"))?;
+                // error_on_failure: without it ort quietly falls back to CPU
+                // when the EP dylib can't load (e.g. cuDNN 9 missing), which
+                // looks identical to GPU mode but runs ~15x slower.
+                match builder.with_execution_providers([cuda.build().error_on_failure()]) {
+                    Ok(b) => {
+                        eprintln!("onnx backend: CUDA execution provider");
+                        builder = b;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "onnx backend: CUDA EP failed to load, using CPU.\n  {e}\n  \
+                             hint: the CUDA EP needs cuDNN 9 on the library path; if you \
+                             have torch installed, try\n  export LD_LIBRARY_PATH=$(python3 \
+                             -c 'import nvidia.cudnn,os;print(os.path.dirname(\
+                             nvidia.cudnn.__file__)+\"/lib\")')"
+                        );
+                        builder = Session::builder()?;
+                    }
+                }
             } else {
                 eprintln!("onnx backend: CUDA not available, using CPU");
             }
@@ -67,13 +73,22 @@ impl Onnx {
         let session = builder
             .commit_from_file(model_dir.join("model.onnx"))
             .with_context(|| format!("loading {}/model.onnx", model_dir.display()))?;
-        let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json"))
+        let mut tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json"))
             .map_err(|e| anyhow::anyhow!("loading tokenizer.json: {e}"))?;
+        // Truncate in the tokenizer, not by slicing ids afterwards: the
+        // tokenizer truncates before appending the trailing special token
+        // ([SEP]), matching the reference implementation on long inputs.
+        tokenizer
+            .with_truncation(Some(tokenizers::TruncationParams {
+                max_length: meta.max_seq,
+                ..Default::default()
+            }))
+            .map_err(|e| anyhow::anyhow!("setting truncation: {e}"))?;
         Ok(Onnx {
             session,
             tokenizer,
             meta,
-            max_batch_tokens: 8192,
+            max_batch_tokens: 16384,
         })
     }
 
@@ -87,48 +102,18 @@ impl Onnx {
         );
         let names: Vec<String> = self.session.inputs().iter().map(|i| i.name().to_string()).collect();
         let ids = Tensor::from_array(([batch, len], ids))?;
-        let mask_t = Tensor::from_array(([batch, len], mask.clone()))?;
+        let mask_t = Tensor::from_array(([batch, len], mask))?;
         let outputs = self
             .session
             .run(ort::inputs![names[0].as_str() => ids, names[1].as_str() => mask_t])?;
+        // The graph pools and normalizes on-device; output is [batch, dim].
         let (shape, data) = outputs[0].try_extract_tensor::<f32>()?;
         ensure!(
-            shape.len() == 3 && shape[2] as usize == self.meta.dim,
-            "unexpected output shape {shape:?}"
+            shape.len() == 2 && shape[1] as usize == self.meta.dim,
+            "unexpected output shape {shape:?} (re-export the model: this \
+             semdup expects pooled [batch, dim] graphs)"
         );
-        let (seq, dim) = (shape[1] as usize, self.meta.dim);
-        let mut out = Vec::with_capacity(batch);
-        for b in 0..batch {
-            let mut pooled;
-            if self.meta.pooling == "cls" {
-                pooled = data[b * seq * dim..b * seq * dim + dim].to_vec();
-            } else {
-                pooled = vec![0f32; dim];
-                let mut n = 0f32;
-                for t in 0..seq {
-                    if mask[b * len + t] == 0 {
-                        continue;
-                    }
-                    n += 1.0;
-                    let row = &data[(b * seq + t) * dim..(b * seq + t + 1) * dim];
-                    for (p, x) in pooled.iter_mut().zip(row) {
-                        *p += x;
-                    }
-                }
-                let norm_n = if n > 0.0 { n } else { 1.0 };
-                for p in &mut pooled {
-                    *p /= norm_n;
-                }
-            }
-            let norm = pooled.iter().map(|x| x * x).sum::<f32>().sqrt();
-            if norm > 0.0 {
-                for p in &mut pooled {
-                    *p /= norm;
-                }
-            }
-            out.push(pooled);
-        }
-        Ok(out)
+        Ok(data.chunks_exact(self.meta.dim).map(<[f32]>::to_vec).collect())
     }
 }
 
@@ -139,10 +124,8 @@ impl Backend for Onnx {
             .tokenizer
             .encode_batch(texts.to_vec(), true)
             .map_err(|e| anyhow::anyhow!("tokenize: {e}"))?;
-        let lens: Vec<usize> = encodings
-            .iter()
-            .map(|e| e.get_ids().len().min(self.meta.max_seq))
-            .collect();
+        // The tokenizer's truncation config caps these at max_seq.
+        let lens: Vec<usize> = encodings.iter().map(|e| e.get_ids().len()).collect();
 
         // Length-sorted greedy batches under a padded-token budget: bounds
         // both padding waste and peak (attention) memory.
@@ -176,7 +159,7 @@ impl Backend for Onnx {
             let candidate_max = lens[i].max(batch.iter().map(|&j| lens[j]).max().unwrap_or(0));
             if !batch.is_empty()
                 && ((batch.len() + 1) * candidate_max > self.max_batch_tokens
-                    || batch.len() >= 32)
+                    || batch.len() >= 64)
             {
                 flush(self, &mut batch, &mut out)?;
             }

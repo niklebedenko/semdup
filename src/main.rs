@@ -95,14 +95,14 @@ enum Cmd {
         #[arg(long)]
         write_baseline: Option<PathBuf>,
     },
-    /// Rank functions touched by a git diff against the corpus (per-MR mode).
+    /// Show nearest corpus neighbors for functions touched by a git diff (per-MR mode).
     Diff {
         /// Base ref to diff the working tree against.
         #[arg(long, default_value = "HEAD")]
         base: String,
         #[arg(long)]
         min_lines: Option<usize>,
-        /// Hard-flag threshold; omit to rely on rank/margin only.
+        /// Calibrated threshold for DUP/REVIEW verdicts; omit for evidence-only output.
         #[arg(long)]
         threshold: Option<f32>,
         #[arg(long)]
