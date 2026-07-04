@@ -169,7 +169,9 @@ fn paths_equal(a: &str, b: &str) -> bool {
 /// Extract functions in the working tree that overlap changed lines vs `base`.
 fn touched_units(base: &str, min_lines: usize, skip_tests: bool) -> Result<Vec<Unit>> {
     let out = Command::new("git")
-        .args(["diff", "-U0", base, "--", "*.rs", "*.ts", "*.tsx"])
+        .args([
+            "diff", "-U0", base, "--", "*.rs", "*.ts", "*.tsx", "*.py", "*.go", "*.java",
+        ])
         .output()
         .context("running git diff")?;
     if !out.status.success() {

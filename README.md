@@ -13,8 +13,8 @@ implementations of the same logic — across files, modules, and languages.
   touched function's nearest corpus neighbors and applies only your chosen
   threshold (a hard `DUP` fails `--check`; a `REVIEW` band just below it is
   advisory). No hidden cleverness — see caveat 1.
-- Rust and TypeScript today; one tree-sitter grammar + ~30 lines per
-  additional language.
+- Rust, TypeScript, Python, Go, and Java today; one tree-sitter grammar +
+  ~30 lines per additional language.
 
 ## Why embeddings?
 
@@ -202,5 +202,6 @@ no SLA.
 ## License
 
 MIT OR Apache-2.0. Eval assets under `eval/injected/` are derived from
-ripgrep (MIT OR Unlicense) and vuejs/core (MIT); each file carries its
+ripgrep (MIT OR Unlicense), vuejs/core (MIT), pallets/flask (BSD-3-Clause),
+junegunn/fzf (MIT), and google/gson (Apache-2.0); each file carries its
 attribution.

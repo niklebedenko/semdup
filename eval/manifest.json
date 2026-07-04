@@ -178,5 +178,95 @@
     "file": "worktree_shared_l3.rs",
     "original": "crates/ignore/src/dir.rs::resolve_git_commondir",
     "level": 3
+  },
+  {
+    "file": "pyimport_l1.py",
+    "original": "src/flask/cli.py::prepare_import",
+    "level": 1
+  },
+  {
+    "file": "pyimport_l2.py",
+    "original": "src/flask/cli.py::prepare_import",
+    "level": 2
+  },
+  {
+    "file": "pyimport_l3.py",
+    "original": "src/flask/cli.py::prepare_import",
+    "level": 3
+  },
+  {
+    "file": "appfind_l1.py",
+    "original": "src/flask/cli.py::find_best_app",
+    "level": 1
+  },
+  {
+    "file": "appfind_l2.py",
+    "original": "src/flask/cli.py::find_best_app",
+    "level": 2
+  },
+  {
+    "file": "appfind_l3.py",
+    "original": "src/flask/cli.py::find_best_app",
+    "level": 3
+  },
+  {
+    "file": "vercmp_l1.go",
+    "original": "src/util/util.go::CompareVersions",
+    "level": 1
+  },
+  {
+    "file": "vercmp_l2.go",
+    "original": "src/util/util.go::CompareVersions",
+    "level": 2
+  },
+  {
+    "file": "vercmp_l3.go",
+    "original": "src/util/util.go::CompareVersions",
+    "level": 3
+  },
+  {
+    "file": "fillrepeat_l1.go",
+    "original": "src/util/util.go::RepeatToFill",
+    "level": 1
+  },
+  {
+    "file": "fillrepeat_l2.go",
+    "original": "src/util/util.go::RepeatToFill",
+    "level": 2
+  },
+  {
+    "file": "fillrepeat_l3.go",
+    "original": "src/util/util.go::RepeatToFill",
+    "level": 3
+  },
+  {
+    "file": "capfirst_l1.java",
+    "original": "com/google/gson/FieldNamingPolicy.java::upperCaseFirstLetter",
+    "level": 1
+  },
+  {
+    "file": "capfirst_l2.java",
+    "original": "com/google/gson/FieldNamingPolicy.java::upperCaseFirstLetter",
+    "level": 2
+  },
+  {
+    "file": "capfirst_l3.java",
+    "original": "com/google/gson/FieldNamingPolicy.java::upperCaseFirstLetter",
+    "level": 3
+  },
+  {
+    "file": "jsonescape_l1.java",
+    "original": "com/google/gson/stream/JsonWriter.java::string",
+    "level": 1
+  },
+  {
+    "file": "jsonescape_l2.java",
+    "original": "com/google/gson/stream/JsonWriter.java::string",
+    "level": 2
+  },
+  {
+    "file": "jsonescape_l3.java",
+    "original": "com/google/gson/stream/JsonWriter.java::string",
+    "level": 3
   }
 ]

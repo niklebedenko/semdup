@@ -22,7 +22,7 @@ nearest neighbors:
 Run it:
 
 ```bash
-eval/fetch-corpus.sh                  # pinned ripgrep + vuejs/core checkouts
+eval/fetch-corpus.sh                  # pinned public-corpus checkouts (see table below)
 semdup extract --root eval/corpus --corpus main
 semdup extract --root eval/injected --corpus injected
 semdup embed --model <MODEL> --model-dir <DIR>
@@ -69,5 +69,8 @@ and read its neighbor evidence by hand.
 |---|---|---|
 | BurntSushi/ripgrep | 4649aa97 (14.1.1) | MIT OR Unlicense |
 | vuejs/core | 6eb29d34 (v3.5.13) | MIT |
+| pallets/flask | ab814966 (3.1.0) | BSD-3-Clause |
+| junegunn/fzf | 3347d615 (v0.60.0) | MIT |
+| google/gson | 29e3d1d2 (2.12.1) | Apache-2.0 |
 
 Checkouts are gitignored; only the derived plants and manifest are committed.

@@ -69,7 +69,7 @@ fn collect_files(dir: &Path, extra_excludes: &[String], out: &mut Vec<PathBuf>) 
             collect_files(&path, extra_excludes, out)?;
         } else if matches!(
             path.extension().and_then(|e| e.to_str()),
-            Some("rs" | "ts" | "tsx")
+            Some("rs" | "ts" | "tsx" | "py" | "go" | "java")
         ) {
             out.push(path);
         }
@@ -86,6 +86,9 @@ pub fn extract_file(path: &Path, src: &str) -> Result<Vec<Unit>> {
             "typescript",
         ),
         "tsx" => (tree_sitter_typescript::LANGUAGE_TSX.into(), "typescript"),
+        "py" => (tree_sitter_python::LANGUAGE.into(), "python"),
+        "go" => (tree_sitter_go::LANGUAGE.into(), "go"),
+        "java" => (tree_sitter_java::LANGUAGE.into(), "java"),
         _ => return Ok(Vec::new()),
     };
     let mut parser = Parser::new();
@@ -169,6 +172,33 @@ fn unit_of<'a>(node: Node<'a>, src: &str, lang: &str) -> Option<(String, Node<'a
             }
             _ => None,
         },
+        "python" => {
+            if kind == "function_definition" {
+                let name = node.child_by_field_name("name")?;
+                // Span the decorators too: they are part of what the function means.
+                let span = match node.parent() {
+                    Some(p) if p.kind() == "decorated_definition" => p,
+                    _ => node,
+                };
+                Some((name_text(name), span))
+            } else {
+                None
+            }
+        }
+        "go" => match kind {
+            "function_declaration" | "method_declaration" => {
+                let name = node.child_by_field_name("name")?;
+                Some((name_text(name), node))
+            }
+            _ => None,
+        },
+        "java" => match kind {
+            "method_declaration" | "constructor_declaration" => {
+                let name = node.child_by_field_name("name")?;
+                Some((name_text(name), node))
+            }
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -187,13 +217,34 @@ fn is_test_path(path: &str) -> bool {
         || path.contains(".test.")
         || path.contains(".spec.")
         || path.contains("__tests__")
+        || path.ends_with("_test.go")
+        || path.ends_with("_test.py")
+        || path.contains("/test_")
+        || path.contains("/src/test/")
+        || path.contains("/conftest")
+}
+
+fn is_test_node(node: Node, src: &str, lang: &str) -> bool {
+    match lang {
+        "rust" => is_rust_test_node(node, src),
+        // pytest collects test_* functions; unittest methods also start with test.
+        "python" => node
+            .child_by_field_name("name")
+            .is_some_and(|n| src[n.byte_range()].starts_with("test")),
+        // go test only runs Test*/Benchmark*/Fuzz*/Example* in _test.go files,
+        // which is_test_path already catches; name alone is not a test marker.
+        "go" => false,
+        // JUnit-style annotation in the method's modifiers (@Test, @ParameterizedTest, ...).
+        "java" => node.children(&mut node.walk()).any(|c| {
+            c.kind() == "modifiers"
+                && src[c.byte_range()].lines().any(|l| l.trim_start().starts_with("@") && l.contains("Test"))
+        }),
+        _ => false,
+    }
 }
 
 /// Rust: `#[test]`-style attribute directly above, or an enclosing `mod tests`.
-fn is_test_node(node: Node, src: &str, lang: &str) -> bool {
-    if lang != "rust" {
-        return false;
-    }
+fn is_rust_test_node(node: Node, src: &str) -> bool {
     let mut sib = node.prev_named_sibling();
     while let Some(s) = sib {
         if s.kind() != "attribute_item" {
@@ -277,9 +328,86 @@ const notAFunction = 42;
     }
 
     #[test]
+    fn python_extraction_functions_methods_decorators() {
+        let src = r#"
+def plain(a):
+    return a * 2
+
+@lru_cache
+def decorated(a):
+    return a * 3
+
+class C:
+    def method(self, a):
+        return a * 4
+
+def test_plain():
+    assert plain(1) == 2
+"#;
+        let units = extract_file(Path::new("mod.py"), src).unwrap();
+        let by_name = |n: &str| units.iter().find(|u| u.name == n).unwrap();
+        let names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(names, ["plain", "decorated", "method", "test_plain"]);
+        // Decorated span starts at the decorator line.
+        assert_eq!(by_name("decorated").start_line, 5);
+        assert!(by_name("decorated").text.starts_with("@lru_cache"));
+        assert!(by_name("test_plain").is_test);
+        assert!(!by_name("method").is_test);
+    }
+
+    #[test]
+    fn go_extraction_functions_and_methods() {
+        let src = r#"
+package main
+
+func plain(a int) int {
+	return a * 2
+}
+
+func (r *Recv) method(a int) int {
+	return a * 3
+}
+"#;
+        let units = extract_file(Path::new("main.go"), src).unwrap();
+        let names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(names, ["plain", "method"]);
+        assert!(units.iter().all(|u| !u.is_test));
+    }
+
+    #[test]
+    fn java_extraction_methods_constructors_junit() {
+        let src = r#"
+class Widget {
+    Widget(int size) {
+        this.size = size;
+    }
+
+    int grow(int by) {
+        return size + by;
+    }
+
+    @Test
+    void growsByAmount() {
+        assert grow(1) == 2;
+    }
+}
+"#;
+        let units = extract_file(Path::new("Widget.java"), src).unwrap();
+        let by_name = |n: &str| units.iter().find(|u| u.name == n).unwrap();
+        let names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(names, ["Widget", "grow", "growsByAmount"]);
+        assert!(by_name("growsByAmount").is_test);
+        assert!(!by_name("grow").is_test);
+    }
+
+    #[test]
     fn test_paths_are_flagged() {
         assert!(is_test_path("src/foo.test.ts"));
         assert!(is_test_path("crate/tests/it.rs"));
         assert!(!is_test_path("src/attest.rs"));
+        assert!(is_test_path("pkg/walk_test.go"));
+        assert!(is_test_path("pkg/test_walk.py"));
+        assert!(is_test_path("app/src/test/java/FooTest.java"));
+        assert!(!is_test_path("pkg/protest.go"));
     }
 }
