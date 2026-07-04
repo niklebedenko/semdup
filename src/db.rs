@@ -117,7 +117,6 @@ pub fn embedding_for(conn: &Connection, model: &str, hash: &str) -> Result<Optio
 pub struct UnitRow {
     pub path: String,
     pub name: String,
-    pub hash: String,
     pub start_line: usize,
     pub end_line: usize,
     pub ignored: bool,
@@ -145,21 +144,20 @@ pub fn load_units(
     model: &str,
 ) -> Result<Vec<(UnitRow, Vec<f32>)>> {
     let mut stmt = conn.prepare(
-        "SELECT u.path, u.name, u.hash, u.start_line, u.end_line, u.ignored, u.is_test, e.vec
+        "SELECT u.path, u.name, u.start_line, u.end_line, u.ignored, u.is_test, e.vec
          FROM units u JOIN embeddings e ON e.hash = u.hash AND e.model = ?1
          WHERE u.corpus = ?2",
     )?;
     let rows = stmt.query_map([model, corpus], |r| {
-        let blob: Vec<u8> = r.get(7)?;
+        let blob: Vec<u8> = r.get(6)?;
         Ok((
             UnitRow {
                 path: r.get(0)?,
                 name: r.get(1)?,
-                hash: r.get(2)?,
-                start_line: r.get::<_, i64>(3)? as usize,
-                end_line: r.get::<_, i64>(4)? as usize,
-                ignored: r.get(5)?,
-                is_test: r.get(6)?,
+                start_line: r.get::<_, i64>(2)? as usize,
+                end_line: r.get::<_, i64>(3)? as usize,
+                ignored: r.get(4)?,
+                is_test: r.get(5)?,
             },
             blob,
         ))

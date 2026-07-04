@@ -6,7 +6,6 @@ use rayon::prelude::*;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::baseline::Baseline;
 use crate::db::{self, UnitRow};
 
 #[derive(Serialize)]
@@ -25,43 +24,11 @@ pub struct ScanOpts<'a> {
     /// Only report clusters with at least this many members ("rule of three"
     /// gating: a helper is only worth it once the logic exists N times).
     pub min_cluster: usize,
-    pub baseline: Option<&'a Path>,
-    /// Instead of reporting, write all pairs above threshold to this baseline file.
-    pub write_baseline: Option<&'a Path>,
 }
 
 pub fn run(conn: &Connection, model: &str, opts: &ScanOpts) -> Result<()> {
     let units = load_scannable(conn, model, opts.min_lines, opts.skip_tests)?;
-    let mut pairs = similar_pairs(&units, opts.threshold);
-
-    if let Some(out) = opts.write_baseline {
-        let bl = Baseline {
-            pairs: pairs
-                .iter()
-                .map(|&(i, j, _)| crate::baseline::pair_key(&units[i].0, &units[j].0))
-                .collect(),
-        };
-        bl.save(out)?;
-        eprintln!(
-            "wrote baseline with {} pairs to {}",
-            pairs.len(),
-            out.display()
-        );
-        return Ok(());
-    }
-
-    if let Some(path) = opts.baseline {
-        let known = Baseline::load(path)?.set();
-        let before = pairs.len();
-        pairs.retain(|&(i, j, _)| {
-            !known.contains(&crate::baseline::pair_key(&units[i].0, &units[j].0))
-        });
-        eprintln!(
-            "baseline suppressed {} of {} pairs",
-            before - pairs.len(),
-            before
-        );
-    }
+    let pairs = similar_pairs(&units, opts.threshold);
 
     // Union-find clustering for display.
     let mut parent: Vec<usize> = (0..units.len()).collect();

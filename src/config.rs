@@ -56,8 +56,6 @@ pub struct Scan {
     pub skip_tests: Option<bool>,
     /// Only report clusters with at least this many members.
     pub min_cluster: Option<usize>,
-    /// Baseline file of known pairs to suppress.
-    pub baseline: Option<PathBuf>,
 }
 
 impl Config {
@@ -93,9 +91,6 @@ impl Config {
             rebase(p);
         }
         if let Some(p) = &mut self.embed.script {
-            rebase(p);
-        }
-        if let Some(p) = &mut self.scan.baseline {
             rebase(p);
         }
     }
