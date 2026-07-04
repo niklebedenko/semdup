@@ -37,6 +37,13 @@ const DEFAULT_EXCLUDES: &[&str] = &[
 
 const IGNORE_DIRECTIVE: &str = "semdup:ignore";
 
+/// File extensions `extract_file` knows how to parse (see the language table
+/// there for how each maps to a grammar).
+pub const SUPPORTED_EXTS: &[&str] = &[
+    "rs", "ts", "tsx", "py", "go", "java", "cs", "php", "rb", "c", "h", "cpp", "cc", "cxx", "hpp",
+    "hh", "hxx",
+];
+
 pub fn extract_roots(
     roots: &[PathBuf],
     extra_excludes: &[String],
@@ -61,38 +68,31 @@ pub fn extract_roots(
     Ok(units)
 }
 
+/// Substring match against the default and configured exclude patterns.
+/// Callers control anchoring via the string they pass: `collect_files`
+/// passes root-relative paths with a trailing `/` and no leading one (so
+/// `/eval/corpus/` never matches inside an explicit `--root eval/corpus`),
+/// while diff passes repo-relative file paths prefixed with `/` so
+/// patterns anchor at the repo root.
+pub fn is_path_excluded(path_str: &str, extra_excludes: &[String]) -> bool {
+    DEFAULT_EXCLUDES.iter().any(|e| path_str.contains(e))
+        || extra_excludes.iter().any(|e| path_str.contains(e.as_str()))
+}
+
 fn collect_files(dir: &Path, extra_excludes: &[String], out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();
         let path_str = format!("{}/", path.display());
-        if DEFAULT_EXCLUDES.iter().any(|e| path_str.contains(e))
-            || extra_excludes.iter().any(|e| path_str.contains(e.as_str()))
-        {
+        if is_path_excluded(&path_str, extra_excludes) {
             continue;
         }
         if path.is_dir() {
             collect_files(&path, extra_excludes, out)?;
-        } else if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some(
-                "rs" | "ts"
-                    | "tsx"
-                    | "py"
-                    | "go"
-                    | "java"
-                    | "cs"
-                    | "php"
-                    | "rb"
-                    | "c"
-                    | "h"
-                    | "cpp"
-                    | "cc"
-                    | "cxx"
-                    | "hpp"
-                    | "hh"
-                    | "hxx"
-            )
-        ) {
+        } else if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| SUPPORTED_EXTS.contains(&e))
+        {
             out.push(path);
         }
     }
@@ -463,6 +463,19 @@ fn is_rust_test_node(node: Node, src: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exclude_matching_anchors_by_caller_convention() {
+        let extra = vec!["/.github/".to_string()];
+        // diff convention: repo-relative file path with a leading `/`.
+        assert!(is_path_excluded("/.github/smoke/plant.rs", &extra));
+        assert!(is_path_excluded("/src/vendor/lib.rs", &[]));
+        assert!(!is_path_excluded("/src/main.rs", &extra));
+        // collect_files convention: no leading slash, so a default exclude
+        // does not fire when it is itself the explicit root.
+        assert!(!is_path_excluded("eval/corpus/flask/app.py/", &[]));
+        assert!(is_path_excluded("repo/eval/corpus/flask/app.py/", &[]));
+    }
 
     #[test]
     fn rust_extraction_names_spans_and_directives() {

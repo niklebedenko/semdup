@@ -1,0 +1,71 @@
+name: Eval
+# Full recall evaluation against the pinned public corpora (~26k units).
+# Embedding that corpus from scratch on a CPU runner takes tens of hours, so
+# runs start from a hosted, pre-embedded DB (release asset `eval-db-1`,
+# derived only from the public eval corpora) and re-embed only what changed.
+# Not part of the PR path except when the pipeline itself changes.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 5 * * 1' # weekly, Monday 05:17 UTC
+  pull_request:
+    paths:
+      - 'eval/**'
+      - 'src/extract.rs'
+      - 'src/embed/**'
+      - 'src/inject.rs'
+      - 'scripts/export_onnx.py'
+      - '.github/workflows/eval.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    # A run that blows well past this re-embedded most of the corpus (e.g. an
+    # extraction change rewrote every unit's text). Re-seed from a GPU box:
+    # embed locally, upload semdup.sqlite as `semdup-eval.sqlite` on the
+    # `eval-db-1` release, and bump the cache key below.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+
+      - name: Cache model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/semdup
+          key: hosted-model-coderankembed-1
+      - name: Cache embedding DB
+        id: db-cache
+        uses: actions/cache@v4
+        with:
+          path: semdup.sqlite
+          key: eval-db-1-${{ github.run_id }}
+          restore-keys: eval-db-1-
+      - name: Seed embedding DB from release (cache miss)
+        # Not gated on cache-hit: that output is false for restore-keys
+        # (partial) matches too, which would overwrite a perfectly good
+        # restored DB every run. The file itself is the source of truth.
+        run: |
+          if [ ! -f semdup.sqlite ]; then
+            curl -fsSL -o semdup.sqlite \
+              https://github.com/niklebedenko/semdup/releases/download/eval-db-1/semdup-eval.sqlite
+          fi
+
+      - name: Fetch pinned corpora
+        run: eval/fetch-corpus.sh
+      - name: Extract + embed drift (CPU)
+        run: |
+          target/release/semdup extract --root eval/corpus --corpus main
+          target/release/semdup extract --root eval/injected --corpus injected
+          target/release/semdup embed
+      - name: Planted-clone recall gate
+        run: |
+          set -o pipefail # tee must not mask a failed gate
+          target/release/semdup inject-eval --manifest eval/manifest.json \
+            --min-recall5 0.9 | tee eval-report.md
+          tail -6 eval-report.md >> "$GITHUB_STEP_SUMMARY"

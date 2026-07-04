@@ -53,8 +53,10 @@ pub fn replace_corpus(conn: &Connection, corpus: &str, units: &[Unit]) -> Result
                 u.path,
                 u.name,
                 u.lang,
-                u.start_line,
-                u.end_line,
+                // usize lost its ToSql/FromSql impls in rusqlite 0.32
+                // (platform-dependent width); go through i64 at the boundary.
+                u.start_line as i64,
+                u.end_line as i64,
                 u.hash,
                 u.ignored,
                 u.is_test,
@@ -89,7 +91,7 @@ pub fn insert_embeddings(
         )?;
         for (hash, vec) in rows {
             let blob: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();
-            ins.execute(rusqlite::params![hash, model, vec.len(), blob])?;
+            ins.execute(rusqlite::params![hash, model, vec.len() as i64, blob])?;
         }
     }
     tx.commit()?;
@@ -154,8 +156,8 @@ pub fn load_units(
                 path: r.get(0)?,
                 name: r.get(1)?,
                 hash: r.get(2)?,
-                start_line: r.get(3)?,
-                end_line: r.get(4)?,
+                start_line: r.get::<_, i64>(3)? as usize,
+                end_line: r.get::<_, i64>(4)? as usize,
                 ignored: r.get(5)?,
                 is_test: r.get(6)?,
             },
@@ -192,13 +194,13 @@ pub fn print_status(conn: &Connection) -> Result<()> {
         conn.prepare("SELECT corpus, lang, COUNT(*) FROM units GROUP BY corpus, lang")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
-        let (corpus, lang, n): (String, String, usize) = (r.get(0)?, r.get(1)?, r.get(2)?);
+        let (corpus, lang, n): (String, String, i64) = (r.get(0)?, r.get(1)?, r.get(2)?);
         println!("units  {corpus:10} {lang:12} {n}");
     }
     let mut stmt = conn.prepare("SELECT model, COUNT(*) FROM embeddings GROUP BY model")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
-        let (model, n): (String, usize) = (r.get(0)?, r.get(1)?);
+        let (model, n): (String, i64) = (r.get(0)?, r.get(1)?);
         println!("embeds {model} {n}");
     }
     Ok(())

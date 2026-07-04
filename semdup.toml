@@ -4,11 +4,12 @@
 
 [extract]
 roots = ["src", "scripts", "sidecar"]
+# The CI smoke plant is a deliberate clone of c_function_name; keep it out
+# of the diff gate (the smoke test copies it into src/ to be found).
+exclude = ["/.github/"]
 
-[embed]
-model = "nomic-ai/CodeRankEmbed"
-backend = "onnx"
-model_dir = "models/coderankembed"
+# No [embed] section: the default model (nomic-ai/CodeRankEmbed) is
+# auto-downloaded into the user cache on first use, both locally and in CI.
 
 [scan]
 # Swept on this repo 2026-07-04: the one real pair sits at 0.756 and the
