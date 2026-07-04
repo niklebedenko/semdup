@@ -42,7 +42,7 @@ jobs:
         with:
           path: models/coderankembed
           key: onnx-model-${{ hashFiles('scripts/export_onnx.py') }}-coderankembed-v1
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         if: steps.model-cache.outputs.cache-hit != 'true'
         with:
           python-version: '3.12'
