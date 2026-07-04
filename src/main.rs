@@ -13,8 +13,9 @@ mod db;
 mod diff;
 mod embed;
 mod extract;
-// Only the onnx backend downloads models; slim builds still use DEFAULT_MODEL.
-#[cfg_attr(not(feature = "onnx"), allow(dead_code))]
+// Only the onnx backend downloads models (and needs ureq); slim builds
+// resolve the default model name from config::DEFAULT_MODEL.
+#[cfg(feature = "onnx")]
 mod fetch;
 mod init;
 mod inject;
@@ -166,7 +167,7 @@ enum Cmd {
 fn resolve_model(cli: Option<String>, cfg: &Config) -> Result<String> {
     Ok(cli
         .or_else(|| cfg.embed.model.clone())
-        .unwrap_or_else(|| fetch::DEFAULT_MODEL.to_string()))
+        .unwrap_or_else(|| config::DEFAULT_MODEL.to_string()))
 }
 
 /// Build the embedding backend from CLI + config. Sidecar needs a script;
@@ -340,6 +341,7 @@ fn main() -> Result<()> {
                 json: json.as_deref(),
                 skip_tests: skip_tests || cfg.scan.skip_tests.unwrap_or(false),
                 strip_comments: cfg.extract.strip_comments.unwrap_or(false),
+                exclude: cfg.extract.exclude.clone().unwrap_or_default(),
             };
             let mut mk = || make_backend(&args, &cfg, &model);
             let findings = diff::run(&conn, &model, &opts, &mut mk)?;

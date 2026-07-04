@@ -7,6 +7,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+/// The model used when neither CLI nor config names one; the onnx backend
+/// auto-downloads its hosted export (fetch.rs). Lives here rather than in
+/// fetch so slim (non-onnx) builds still resolve the same default name.
+pub const DEFAULT_MODEL: &str = "nomic-ai/CodeRankEmbed";
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Config {

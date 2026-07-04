@@ -42,6 +42,9 @@ pub struct DiffOpts<'a> {
     /// Must match how the corpus was extracted, or cosines are not
     /// comparable ([extract].strip_comments).
     pub strip_comments: bool,
+    /// [extract].exclude — a file the corpus would never contain shouldn't
+    /// be gated when a diff touches it (CI fixtures, vendored code).
+    pub exclude: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -202,6 +205,11 @@ fn touched_units(opts: &DiffOpts) -> Result<Vec<Unit>> {
 
     let mut units = Vec::new();
     for (file, changed) in ranges {
+        // Anchor at the repo root (git paths are repo-relative) so exclude
+        // patterns like "/vendor/" match the same way they do in extract.
+        if extract::is_path_excluded(&format!("/{file}"), &opts.exclude) {
+            continue;
+        }
         let path = Path::new(&file);
         let Ok(src) = std::fs::read_to_string(path) else {
             continue; // deleted or unreadable

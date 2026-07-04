@@ -87,9 +87,9 @@ semdup scan --baseline semdup-baseline.json
 semdup diff --base origin/main --check
 ```
 
-Persistent settings live in `semdup.toml` at the repo root (written by
-`init`, discovered by walking up from the working directory); CLI flags
-override it:
+Persistent settings live in `semdup.toml` at the repo root (discovered by
+walking up from the working directory); CLI flags override it. `init` writes
+the essentials; everything it accepts, annotated:
 
 ```toml
 db = "semdup.sqlite"

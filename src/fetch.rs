@@ -18,9 +18,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail, ensure};
 
-/// The model `init` configures and `embed` falls back to when the config
-/// names it without a `model_dir`.
-pub const DEFAULT_MODEL: &str = "nomic-ai/CodeRankEmbed";
+use crate::config::DEFAULT_MODEL;
 
 const RELEASE_BASE: &str =
     "https://github.com/niklebedenko/semdup/releases/download/model-coderankembed-1";
@@ -151,8 +149,16 @@ pub fn ensure_default_model(model: &str) -> Result<PathBuf> {
 
 fn download_verified(asset: &Asset, dir: &std::path::Path) -> Result<()> {
     let url = format!("{RELEASE_BASE}/{}", asset.url_name);
-    let tmp = dir.join(format!("{}.part", asset.file));
-    let resp = ureq::get(&url).call().with_context(|| {
+    // Pid-unique temp path: concurrent cold-cache invocations (parallel CI
+    // jobs, two terminals) must not truncate each other's in-flight download.
+    let tmp = dir.join(format!("{}.{}.part", asset.file, std::process::id()));
+    // No overall deadline (the fp32 asset is ~548 MB on arbitrarily slow
+    // links), but a stalled connect or read must fail instead of hanging.
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(30))
+        .timeout_read(std::time::Duration::from_secs(60))
+        .build();
+    let resp = agent.get(&url).call().with_context(|| {
         format!(
             "GET {url}\n  (release asset missing or offline? see docs/models.md \
              for exporting the model yourself)"

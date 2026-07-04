@@ -21,6 +21,11 @@ const DEFAULT_MIN_LINES: usize = 8;
 
 /// Run the wizard and write `semdup.toml` into `dir`. Returns the config path.
 pub fn run(dir: &Path, yes: bool) -> Result<PathBuf> {
+    // Before any prompt, including the overwrite one below: a piped stdin
+    // must get the clear error, not an invisible read.
+    if !yes && !std::io::stdin().is_terminal() {
+        bail!("stdin is not a terminal; use `semdup init --yes` for non-interactive setup");
+    }
     let config_path = dir.join("semdup.toml");
     if config_path.exists() {
         if yes {
@@ -35,9 +40,6 @@ pub fn run(dir: &Path, yes: bool) -> Result<PathBuf> {
         ))? {
             bail!("keeping the existing config");
         }
-    }
-    if !yes && !std::io::stdin().is_terminal() {
-        bail!("stdin is not a terminal; use `semdup init --yes` for non-interactive setup");
     }
 
     let (roots, by_lang) = detect_roots(dir)?;
@@ -166,11 +168,14 @@ fn list_files(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    const SKIP: &[&str] = &["target", "node_modules", "dist", "vendor", "build"];
     for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name.starts_with('.') || SKIP.contains(&name) {
+        // Same excludes the extractor will apply, so detected roots never
+        // point at directories extraction would skip anyway.
+        if name.starts_with('.')
+            || crate::extract::is_path_excluded(&format!("{}/", path.display()), &[])
+        {
             continue;
         }
         if path.is_dir() {
@@ -230,6 +235,9 @@ fn confirm(label: &str) -> Result<bool> {
     confirm_default(label, false)
 }
 
+// semdup:ignore — confirm() is a one-line delegate to this; the shared
+// vocabulary reads as a near-duplicate to the embedding, but there is
+// nothing to deduplicate.
 fn confirm_default(label: &str, default: bool) -> Result<bool> {
     let hint = if default { "Y/n" } else { "y/N" };
     let line = prompt(&format!("{label} [{hint}]"))?;

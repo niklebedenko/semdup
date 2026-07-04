@@ -47,10 +47,14 @@ jobs:
           key: eval-db-1-${{ github.run_id }}
           restore-keys: eval-db-1-
       - name: Seed embedding DB from release (cache miss)
-        if: steps.db-cache.outputs.cache-hit != 'true'
+        # Not gated on cache-hit: that output is false for restore-keys
+        # (partial) matches too, which would overwrite a perfectly good
+        # restored DB every run. The file itself is the source of truth.
         run: |
-          curl -fsSL -o semdup.sqlite \
-            https://github.com/niklebedenko/semdup/releases/download/eval-db-1/semdup-eval.sqlite
+          if [ ! -f semdup.sqlite ]; then
+            curl -fsSL -o semdup.sqlite \
+              https://github.com/niklebedenko/semdup/releases/download/eval-db-1/semdup-eval.sqlite
+          fi
 
       - name: Fetch pinned corpora
         run: eval/fetch-corpus.sh
