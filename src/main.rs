@@ -232,6 +232,8 @@ fn refresh(conn: &rusqlite::Connection, cfg: &Config, args: &EmbedArgs) -> Resul
 }
 
 fn main() -> Result<()> {
+    #[cfg(all(unix, feature = "cuda"))]
+    embed::provider_libs::reexec_with_absolute_argv0();
     let cli = Cli::parse();
     let cfg = Config::discover(&std::env::current_dir()?)?;
     let db_path = cli
