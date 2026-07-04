@@ -24,6 +24,31 @@ const PROVIDER_LIBS: [&str; 2] = [
     "libonnxruntime_providers_cuda.so",
 ];
 
+/// onnxruntime resolves the provider libraries relative to `dladdr`'s
+/// `dli_fname` for the (statically linked) main module — which on glibc is
+/// argv[0]. Invoked as a bare name via PATH, argv[0] has no directory and
+/// the lookup falls back to the working directory, missing the libraries
+/// next to the executable. Re-exec once with an absolute argv[0] so the
+/// lookup lands where `ensure_next_to_exe` put them. No-op (and no loop
+/// risk) when argv[0] already has a directory component.
+#[cfg(unix)]
+pub fn reexec_with_absolute_argv0() {
+    let Some(argv0) = std::env::args_os().next() else {
+        return;
+    };
+    if argv0.as_encoded_bytes().contains(&b'/') {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    use std::os::unix::process::CommandExt;
+    // exec only returns on failure; degrade to the CWD-lookup status quo.
+    let _ = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .exec();
+}
+
 /// Make the CUDA provider libraries loadable, linking them from ort's
 /// download cache when the executable's directory lacks them. Returns a
 /// note describing what was done, or `None` if nothing was needed.
