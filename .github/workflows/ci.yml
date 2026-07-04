@@ -88,3 +88,21 @@ jobs:
           git rm -q --cached src/ci_smoke_plant.rs && rm src/ci_smoke_plant.rs
           echo "$out" | grep -A1 'ci_smoke_plant\.rs' | grep -q 'globset/src/lib\.rs.* escape$' || {
             echo "expected escape() as the plant's top neighbor"; exit 1; }
+
+      # Dogfood: semdup on semdup. Config (roots, threshold, model) comes from
+      # semdup.toml; a separate DB keeps the eval corpus in semdup.sqlite
+      # untouched. Scan is advisory on pushes; diff --check gates PRs.
+      - name: Dogfood — index own source
+        run: |
+          target/release/semdup --db dogfood.sqlite extract
+          target/release/semdup --db dogfood.sqlite embed
+      - name: Dogfood — scan (advisory)
+        run: |
+          target/release/semdup --db dogfood.sqlite scan | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Dogfood — diff gate (PRs)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --depth 1 origin "$BASE_REF"
+          target/release/semdup --db dogfood.sqlite diff --base "origin/$BASE_REF" --check
+        env:
+          BASE_REF: ${{ github.base_ref }}

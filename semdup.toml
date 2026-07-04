@@ -1,0 +1,19 @@
+# Dogfood config: semdup scanning its own source. CI runs `scan` (advisory)
+# on every push and `diff --check` on PRs; see .github/workflows/ci.yml.
+# The eval pipeline is unaffected — it passes --root/--db explicitly.
+
+[extract]
+roots = ["src", "scripts", "sidecar"]
+
+[embed]
+model = "nomic-ai/CodeRankEmbed"
+backend = "onnx"
+model_dir = "models/coderankembed"
+
+[scan]
+# Swept on this repo 2026-07-04: the one real pair sits at 0.756 and the
+# by-design mirrors (per-command run() entry points, onnx/sidecar backends)
+# top out at 0.685. Re-sweep after big refactors or a model change.
+threshold = 0.70
+min_lines = 8
+skip_tests = true

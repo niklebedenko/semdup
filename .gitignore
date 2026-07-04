@@ -4,3 +4,5 @@
 /models/
 scan*.md
 scan*.json
+.*.swp
+/dogfood-baseline.json

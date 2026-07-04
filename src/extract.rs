@@ -435,6 +435,7 @@ fn is_test_node(node: Node, src: &str, lang: &str) -> bool {
 }
 
 /// Rust: `#[test]`-style attribute directly above, or an enclosing `mod tests`.
+// semdup:ignore — per-language variant of is_test_node's dispatch; parallel by design
 fn is_rust_test_node(node: Node, src: &str) -> bool {
     let mut sib = node.prev_named_sibling();
     while let Some(s) = sib {

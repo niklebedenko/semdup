@@ -5,9 +5,13 @@ edition = "2024"
 rust-version = "1.88"
 description = "Embedding-based near-duplicate function detector for source code"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/nlebedenko/semdup"
+repository = "https://github.com/niklebedenko/semdup"
+readme = "README.md"
 keywords = ["duplicate", "clone-detection", "lint", "embeddings"]
 categories = ["development-tools", "command-line-utilities"]
+# Keep the crate lean: eval corpora/plants and CI config aren't needed at
+# install time (the eval harness is a git-checkout workflow).
+exclude = [".github/", "eval/", "semdup.toml"]
 
 [features]
 default = ["onnx"]
