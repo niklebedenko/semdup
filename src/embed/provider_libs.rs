@@ -36,7 +36,7 @@ pub fn reexec_with_absolute_argv0() {
     let Some(argv0) = std::env::args_os().next() else {
         return;
     };
-    if argv0.as_encoded_bytes().contains(&b'/') {
+    if !is_bare_argv0(&argv0) {
         return;
     }
     let Ok(exe) = std::env::current_exe() else {
@@ -47,6 +47,13 @@ pub fn reexec_with_absolute_argv0() {
     let _ = std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
         .exec();
+}
+
+/// A bare command name (no directory component) came from a PATH lookup —
+/// the case where the provider search degrades to the working directory.
+#[cfg(unix)]
+fn is_bare_argv0(argv0: &std::ffi::OsStr) -> bool {
+    !argv0.as_encoded_bytes().contains(&b'/')
 }
 
 /// Make the CUDA provider libraries loadable, linking them from ort's
@@ -182,6 +189,15 @@ mod tests {
         let got = newest_provider_dir(&[old_root, new_root]).unwrap();
         assert_eq!(got, newer);
         assert!(newest_provider_dir(&[tmp.path().join("absent")]).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reexecs_only_for_bare_argv0() {
+        let bare = |s| is_bare_argv0(std::ffi::OsStr::new(s));
+        assert!(bare("semdup"));
+        assert!(!bare("./semdup"));
+        assert!(!bare("/usr/bin/semdup"));
     }
 
     #[cfg(unix)]
