@@ -25,6 +25,8 @@ pub struct Config {
 pub struct Extract {
     pub roots: Option<Vec<PathBuf>>,
     pub exclude: Option<Vec<String>>,
+    /// Strip comments and Python docstrings from unit text before embedding.
+    pub strip_comments: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]

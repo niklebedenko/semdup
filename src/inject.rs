@@ -25,8 +25,7 @@ pub fn run(
     min_lines: usize,
     min_recall5: Option<f32>,
 ) -> Result<()> {
-    let manifest: Vec<PlantEntry> =
-        serde_json::from_str(&std::fs::read_to_string(manifest_path)?)?;
+    let manifest: Vec<PlantEntry> = serde_json::from_str(&std::fs::read_to_string(manifest_path)?)?;
     let main: Vec<(UnitRow, Vec<f32>)> = db::load_units(conn, "main", model)?
         .into_iter()
         .filter(|(u, _)| u.lines() >= min_lines)
@@ -37,11 +36,7 @@ pub fn run(
     }
 
     println!("# inject-eval — model {model}");
-    println!(
-        "\ncorpus {} units; {} plants\n",
-        main.len(),
-        manifest.len()
-    );
+    println!("\ncorpus {} units; {} plants\n", main.len(), manifest.len());
     println!("| level | plant | cos(orig) | rank | margin | top hit |");
     println!("|---|---|---|---|---|---|");
 

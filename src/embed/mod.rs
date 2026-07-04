@@ -40,7 +40,11 @@ pub fn run(conn: &Connection, model: &str, backend: &mut dyn Backend) -> Result<
             .iter()
             .map(|(_, t)| {
                 let stripped = strip_doc_comments(t);
-                if stripped.trim().is_empty() { t.clone() } else { stripped }
+                if stripped.trim().is_empty() {
+                    t.clone()
+                } else {
+                    stripped
+                }
             })
             .collect();
         let vecs = backend.embed(&texts)?;

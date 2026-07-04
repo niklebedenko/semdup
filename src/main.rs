@@ -1,6 +1,6 @@
 //! semdup: embedding-based near-duplicate function detector.
 //!
-//! Pipeline: tree-sitter extraction (Rust/TS) -> SQLite unit+embedding cache
+//! Pipeline: tree-sitter extraction -> SQLite unit+embedding cache
 //! -> embedding (built-in ONNX Runtime backend, or a python sidecar for
 //! arbitrary models) -> exact pairwise cosine -> clustered report.
 //! Suppression: put `semdup:ignore` in a comment on, or up to three lines
@@ -24,7 +24,11 @@ use clap::{Parser, Subcommand};
 use config::Config;
 
 #[derive(Parser)]
-#[command(name = "semdup", version, about = "embedding-based near-duplicate detector")]
+#[command(
+    name = "semdup",
+    version,
+    about = "embedding-based near-duplicate detector"
+)]
 struct Cli {
     /// SQLite cache path (default: from semdup.toml, else semdup.sqlite).
     #[arg(long, global = true)]
@@ -53,7 +57,7 @@ struct EmbedArgs {
 enum Cmd {
     /// Parse source trees and (re)build the unit table for a corpus.
     Extract {
-        /// Root directories to walk for .rs/.ts/.tsx files.
+        /// Root directories to walk for supported source files.
         #[arg(long)]
         root: Vec<PathBuf>,
         /// Corpus name ("main" for the real tree, "injected" for eval plants).
@@ -62,6 +66,11 @@ enum Cmd {
         /// Path substrings to skip in addition to the built-in excludes.
         #[arg(long)]
         exclude: Vec<String>,
+        /// Strip comments and Python docstrings from unit text before
+        /// hashing/embedding: compares meaning of code alone, and shows how
+        /// much of the similarity signal is prose.
+        #[arg(long)]
+        strip_comments: bool,
     },
     /// Embed all units that lack a vector for the configured model.
     Embed {
@@ -198,17 +207,20 @@ fn main() -> Result<()> {
             root,
             corpus,
             exclude,
+            strip_comments,
         } => {
             let roots = if root.is_empty() {
-                cfg.extract.roots.clone().context(
-                    "no roots given (--root or [extract].roots in semdup.toml)",
-                )?
+                cfg.extract
+                    .roots
+                    .clone()
+                    .context("no roots given (--root or [extract].roots in semdup.toml)")?
             } else {
                 root
             };
             let mut excludes = cfg.extract.exclude.clone().unwrap_or_default();
             excludes.extend(exclude);
-            let units = extract::extract_roots(&roots, &excludes)?;
+            let strip = strip_comments || cfg.extract.strip_comments.unwrap_or(false);
+            let units = extract::extract_roots(&roots, &excludes, strip)?;
             let n = units.len();
             db::replace_corpus(&conn, &corpus, &units)?;
             eprintln!("extracted {n} units into corpus '{corpus}'");
@@ -230,9 +242,9 @@ fn main() -> Result<()> {
             write_baseline,
         } => {
             let model = resolve_model(model, &cfg)?;
-            let threshold = threshold.or(cfg.scan.threshold).context(
-                "no threshold given (--threshold or [scan].threshold in semdup.toml)",
-            )?;
+            let threshold = threshold
+                .or(cfg.scan.threshold)
+                .context("no threshold given (--threshold or [scan].threshold in semdup.toml)")?;
             let opts = scan::ScanOpts {
                 threshold,
                 min_lines: min_lines.or(cfg.scan.min_lines).unwrap_or(5),
@@ -261,6 +273,7 @@ fn main() -> Result<()> {
                 threshold: threshold.or(cfg.scan.threshold),
                 json: json.as_deref(),
                 skip_tests: skip_tests || cfg.scan.skip_tests.unwrap_or(false),
+                strip_comments: cfg.extract.strip_comments.unwrap_or(false),
             };
             let mut mk = || make_backend(&args, &cfg, &model);
             let findings = diff::run(&conn, &model, &opts, &mut mk)?;

@@ -73,7 +73,10 @@ mod tests {
 
     #[test]
     fn key_is_order_independent() {
-        assert_eq!(pair_key(&unit("b"), &unit("a")), pair_key(&unit("a"), &unit("b")));
+        assert_eq!(
+            pair_key(&unit("b"), &unit("a")),
+            pair_key(&unit("a"), &unit("b"))
+        );
     }
 
     #[test]

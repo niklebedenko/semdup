@@ -45,7 +45,8 @@ pub fn replace_corpus(conn: &Connection, corpus: &str, units: &[Unit]) -> Result
             "INSERT INTO units (corpus, path, name, lang, start_line, end_line, hash, ignored, is_test)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )?;
-        let mut ins_text = tx.prepare("INSERT OR IGNORE INTO texts (hash, text) VALUES (?1, ?2)")?;
+        let mut ins_text =
+            tx.prepare("INSERT OR IGNORE INTO texts (hash, text) VALUES (?1, ?2)")?;
         for u in units {
             ins_unit.execute(rusqlite::params![
                 corpus,
@@ -97,8 +98,7 @@ pub fn insert_embeddings(
 
 /// Embedding for a single text hash, if cached.
 pub fn embedding_for(conn: &Connection, model: &str, hash: &str) -> Result<Option<Vec<f32>>> {
-    let mut stmt =
-        conn.prepare("SELECT vec FROM embeddings WHERE hash = ?1 AND model = ?2")?;
+    let mut stmt = conn.prepare("SELECT vec FROM embeddings WHERE hash = ?1 AND model = ?2")?;
     let mut rows = stmt.query([hash, model])?;
     match rows.next()? {
         Some(r) => {

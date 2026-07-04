@@ -268,5 +268,155 @@
     "file": "jsonescape_l3.java",
     "original": "com/google/gson/stream/JsonWriter.java::string",
     "level": 3
+  },
+  {
+    "file": "camelcase_l1.cs",
+    "original": "Src/Newtonsoft.Json/Utilities/StringUtils.cs::ToCamelCase",
+    "level": 1
+  },
+  {
+    "file": "camelcase_l2.cs",
+    "original": "Src/Newtonsoft.Json/Utilities/StringUtils.cs::ToCamelCase",
+    "level": 2
+  },
+  {
+    "file": "camelcase_l3.cs",
+    "original": "Src/Newtonsoft.Json/Utilities/StringUtils.cs::ToCamelCase",
+    "level": 3
+  },
+  {
+    "file": "sepcase_l1.cs",
+    "original": "Src/Newtonsoft.Json/Utilities/StringUtils.cs::ToSeparatedCase",
+    "level": 1
+  },
+  {
+    "file": "sepcase_l2.cs",
+    "original": "Src/Newtonsoft.Json/Utilities/StringUtils.cs::ToSeparatedCase",
+    "level": 2
+  },
+  {
+    "file": "sepcase_l3.cs",
+    "original": "Src/Newtonsoft.Json/Utilities/StringUtils.cs::ToSeparatedCase",
+    "level": 3
+  },
+  {
+    "file": "noproxy_l1.php",
+    "original": "src/Utils.php::isHostInNoProxy",
+    "level": 1
+  },
+  {
+    "file": "noproxy_l2.php",
+    "original": "src/Utils.php::isHostInNoProxy",
+    "level": 2
+  },
+  {
+    "file": "noproxy_l3.php",
+    "original": "src/Utils.php::isHostInNoProxy",
+    "level": 3
+  },
+  {
+    "file": "redirmod_l1.php",
+    "original": "src/RedirectMiddleware.php::modifyRequest",
+    "level": 1
+  },
+  {
+    "file": "redirmod_l2.php",
+    "original": "src/RedirectMiddleware.php::modifyRequest",
+    "level": 2
+  },
+  {
+    "file": "redirmod_l3.php",
+    "original": "src/RedirectMiddleware.php::modifyRequest",
+    "level": 3
+  },
+  {
+    "file": "absuri_l1.rb",
+    "original": "lib/sinatra/base.rb::uri",
+    "level": 1
+  },
+  {
+    "file": "absuri_l2.rb",
+    "original": "lib/sinatra/base.rb::uri",
+    "level": 2
+  },
+  {
+    "file": "absuri_l3.rb",
+    "original": "lib/sinatra/base.rb::uri",
+    "level": 3
+  },
+  {
+    "file": "cachectl_l1.rb",
+    "original": "lib/sinatra/base.rb::cache_control",
+    "level": 1
+  },
+  {
+    "file": "cachectl_l2.rb",
+    "original": "lib/sinatra/base.rb::cache_control",
+    "level": 2
+  },
+  {
+    "file": "cachectl_l3.rb",
+    "original": "lib/sinatra/base.rb::cache_control",
+    "level": 3
+  },
+  {
+    "file": "utf8enc_l1.c",
+    "original": "src/jv_unicode.c::jvp_utf8_encode",
+    "level": 1
+  },
+  {
+    "file": "utf8enc_l2.c",
+    "original": "src/jv_unicode.c::jvp_utf8_encode",
+    "level": 2
+  },
+  {
+    "file": "utf8enc_l3.c",
+    "original": "src/jv_unicode.c::jvp_utf8_encode",
+    "level": 3
+  },
+  {
+    "file": "utf8next_l1.c",
+    "original": "src/jv_unicode.c::jvp_utf8_next",
+    "level": 1
+  },
+  {
+    "file": "utf8next_l2.c",
+    "original": "src/jv_unicode.c::jvp_utf8_next",
+    "level": 2
+  },
+  {
+    "file": "utf8next_l3.c",
+    "original": "src/jv_unicode.c::jvp_utf8_next",
+    "level": 3
+  },
+  {
+    "file": "parseint_l1.cpp",
+    "original": "include/fmt/base.h::parse_nonnegative_int",
+    "level": 1
+  },
+  {
+    "file": "parseint_l2.cpp",
+    "original": "include/fmt/base.h::parse_nonnegative_int",
+    "level": 2
+  },
+  {
+    "file": "parseint_l3.cpp",
+    "original": "include/fmt/base.h::parse_nonnegative_int",
+    "level": 3
+  },
+  {
+    "file": "dispwidth_l1.cpp",
+    "original": "include/fmt/format.h::compute_width",
+    "level": 1
+  },
+  {
+    "file": "dispwidth_l2.cpp",
+    "original": "include/fmt/format.h::compute_width",
+    "level": 2
+  },
+  {
+    "file": "dispwidth_l3.cpp",
+    "original": "include/fmt/format.h::compute_width",
+    "level": 3
   }
 ]

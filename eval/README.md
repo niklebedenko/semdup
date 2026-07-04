@@ -63,6 +63,19 @@ on. Re-sweep after switching models. If no value gives a report you trust,
 don't gate CI on a threshold at all — use `semdup diff` without `--check`
 and read its neighbor evidence by hand.
 
+## Prose vs code: `--strip-comments`
+
+Doc comments are always stripped; `extract --strip-comments` additionally
+removes inline/block comments and Python docstrings, so similarity is
+computed over code alone. On this benchmark the effect is mildly positive —
+recall@1 rises at L1 (0.89 → 0.93) and L3 (0.75 → 0.82) and mean margins
+improve a few points, while one L2 plant slips out of the top 5
+(recall@5 0.96 → 0.93). Expect it to matter most on codebases with heavy
+shared comment boilerplate (license headers inside functions, templated
+TODO/summary blocks); on prose-light code it's close to a wash. Rerun the
+comparison on your own corpus before deciding — it's two extract runs into
+two `--db` paths.
+
 ## Corpus provenance
 
 | corpus | pin | license |
@@ -72,5 +85,10 @@ and read its neighbor evidence by hand.
 | pallets/flask | ab814966 (3.1.0) | BSD-3-Clause |
 | junegunn/fzf | 3347d615 (v0.60.0) | MIT |
 | google/gson | 29e3d1d2 (2.12.1) | Apache-2.0 |
+| JamesNK/Newtonsoft.Json | 0a2e291c (13.0.3) | MIT |
+| guzzle/guzzle | d281ed31 (7.9.2) | MIT |
+| sinatra/sinatra | 7b50a1bb (v4.1.1) | MIT |
+| jqlang/jq | 71c2ab50 (jq-1.7.1) | MIT |
+| fmtlib/fmt | 12391371 (11.1.4) | MIT |
 
 Checkouts are gitignored; only the derived plants and manifest are committed.

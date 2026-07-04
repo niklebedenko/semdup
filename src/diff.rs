@@ -39,6 +39,9 @@ pub struct DiffOpts<'a> {
     pub threshold: Option<f32>,
     pub json: Option<&'a Path>,
     pub skip_tests: bool,
+    /// Must match how the corpus was extracted, or cosines are not
+    /// comparable ([extract].strip_comments).
+    pub strip_comments: bool,
 }
 
 #[derive(Serialize)]
@@ -67,9 +70,12 @@ pub fn run(
         bail!("corpus is empty for model {model}; run `semdup extract` and `semdup embed` first");
     }
 
-    let touched = touched_units(&opts.base, opts.min_lines, opts.skip_tests)?;
+    let touched = touched_units(opts)?;
     if touched.is_empty() {
-        eprintln!("no touched functions (>= {} lines) in diff vs {}", opts.min_lines, opts.base);
+        eprintln!(
+            "no touched functions (>= {} lines) in diff vs {}",
+            opts.min_lines, opts.base
+        );
         return Ok(0);
     }
     eprintln!("{} touched function(s) vs {}", touched.len(), opts.base);
@@ -86,7 +92,11 @@ pub fn run(
             .iter()
             .map(|&i| {
                 let s = strip_doc_comments(&touched[i].text);
-                if s.trim().is_empty() { touched[i].text.clone() } else { s }
+                if s.trim().is_empty() {
+                    touched[i].text.clone()
+                } else {
+                    s
+                }
             })
             .collect();
         let embedded = backend.embed(&texts)?;
@@ -124,13 +134,19 @@ pub fn run(
             findings += 1;
         }
         reports.push(Report {
-            unit: format!("{}:{}-{} {}", unit.path, unit.start_line, unit.end_line, unit.name),
+            unit: format!(
+                "{}:{}-{} {}",
+                unit.path, unit.start_line, unit.end_line, unit.name
+            ),
             verdict,
             margin,
             neighbors: scored
                 .iter()
                 .take(3)
-                .map(|&(i, s)| Neighbor { unit: corpus[i].0.label(), cosine: s })
+                .map(|&(i, s)| Neighbor {
+                    unit: corpus[i].0.label(),
+                    cosine: s,
+                })
                 .collect(),
         });
     }
@@ -167,10 +183,12 @@ fn paths_equal(a: &str, b: &str) -> bool {
 }
 
 /// Extract functions in the working tree that overlap changed lines vs `base`.
-fn touched_units(base: &str, min_lines: usize, skip_tests: bool) -> Result<Vec<Unit>> {
+fn touched_units(opts: &DiffOpts) -> Result<Vec<Unit>> {
+    let (base, min_lines, skip_tests) = (&opts.base, opts.min_lines, opts.skip_tests);
     let out = Command::new("git")
         .args([
-            "diff", "-U0", base, "--", "*.rs", "*.ts", "*.tsx", "*.py", "*.go", "*.java",
+            "diff", "-U0", base, "--", "*.rs", "*.ts", "*.tsx", "*.py", "*.go", "*.java", "*.cs",
+            "*.php", "*.rb", "*.c", "*.h", "*.cpp", "*.cc", "*.cxx", "*.hpp", "*.hh", "*.hxx",
         ])
         .output()
         .context("running git diff")?;
@@ -188,7 +206,7 @@ fn touched_units(base: &str, min_lines: usize, skip_tests: bool) -> Result<Vec<U
         let Ok(src) = std::fs::read_to_string(path) else {
             continue; // deleted or unreadable
         };
-        for u in extract::extract_file(path, &src)? {
+        for u in extract::extract_file(path, &src, opts.strip_comments)? {
             let overlaps = changed
                 .iter()
                 .any(|&(lo, hi)| u.start_line <= hi && lo <= u.end_line);
@@ -238,7 +256,10 @@ mod tests {
 
     #[test]
     fn hunk_ranges() {
-        assert_eq!(parse_hunk_new_range("@@ -10,2 +12,3 @@ fn x()"), Some((12, 14)));
+        assert_eq!(
+            parse_hunk_new_range("@@ -10,2 +12,3 @@ fn x()"),
+            Some((12, 14))
+        );
         assert_eq!(parse_hunk_new_range("@@ -10 +12 @@"), Some((12, 12)));
         assert_eq!(parse_hunk_new_range("@@ -10,2 +12,0 @@"), None);
     }

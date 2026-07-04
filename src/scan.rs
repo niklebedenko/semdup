@@ -128,7 +128,10 @@ pub fn run(conn: &Connection, model: &str, opts: &ScanOpts) -> Result<()> {
         println!();
     }
     if ordered.len() > opts.top {
-        println!("... {} more clusters (raise --top)", ordered.len() - opts.top);
+        println!(
+            "... {} more clusters (raise --top)",
+            ordered.len() - opts.top
+        );
     }
 
     if let Some(path) = opts.json {

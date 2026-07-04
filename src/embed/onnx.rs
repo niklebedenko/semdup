@@ -92,7 +92,13 @@ impl Onnx {
         })
     }
 
-    fn run_batch(&mut self, ids: Vec<i64>, mask: Vec<i64>, batch: usize, len: usize) -> Result<Vec<Vec<f32>>> {
+    fn run_batch(
+        &mut self,
+        ids: Vec<i64>,
+        mask: Vec<i64>,
+        batch: usize,
+        len: usize,
+    ) -> Result<Vec<Vec<f32>>> {
         // Input names vary by exporter (the dynamo exporter mangles them), so
         // bind positionally: (input_ids, attention_mask) is the export order.
         ensure!(
@@ -100,7 +106,12 @@ impl Onnx {
             "expected 2 model inputs, got {}",
             self.session.inputs().len()
         );
-        let names: Vec<String> = self.session.inputs().iter().map(|i| i.name().to_string()).collect();
+        let names: Vec<String> = self
+            .session
+            .inputs()
+            .iter()
+            .map(|i| i.name().to_string())
+            .collect();
         let ids = Tensor::from_array(([batch, len], ids))?;
         let mask_t = Tensor::from_array(([batch, len], mask))?;
         let outputs = self
@@ -113,7 +124,10 @@ impl Onnx {
             "unexpected output shape {shape:?} (re-export the model: this \
              semdup expects pooled [batch, dim] graphs)"
         );
-        Ok(data.chunks_exact(self.meta.dim).map(<[f32]>::to_vec).collect())
+        Ok(data
+            .chunks_exact(self.meta.dim)
+            .map(<[f32]>::to_vec)
+            .collect())
     }
 }
 
@@ -133,33 +147,33 @@ impl Backend for Onnx {
         order.sort_by_key(|&i| lens[i]);
         let mut out = vec![Vec::new(); texts.len()];
         let mut batch: Vec<usize> = Vec::new();
-        let flush = |this: &mut Self, batch: &mut Vec<usize>, out: &mut Vec<Vec<f32>>| -> Result<()> {
-            if batch.is_empty() {
-                return Ok(());
-            }
-            let max_len = batch.iter().map(|&i| lens[i]).max().unwrap_or(1).max(1);
-            let mut ids = Vec::with_capacity(batch.len() * max_len);
-            let mut mask = Vec::with_capacity(batch.len() * max_len);
-            for &i in batch.iter() {
-                let e = &encodings[i];
-                let n = lens[i];
-                ids.extend(e.get_ids()[..n].iter().map(|&x| x as i64));
-                mask.extend(e.get_attention_mask()[..n].iter().map(|&x| x as i64));
-                ids.extend(std::iter::repeat_n(0i64, max_len - n));
-                mask.extend(std::iter::repeat_n(0i64, max_len - n));
-            }
-            let vecs = this.run_batch(ids, mask, batch.len(), max_len)?;
-            for (&i, v) in batch.iter().zip(vecs) {
-                out[i] = v;
-            }
-            batch.clear();
-            Ok(())
-        };
+        let flush =
+            |this: &mut Self, batch: &mut Vec<usize>, out: &mut Vec<Vec<f32>>| -> Result<()> {
+                if batch.is_empty() {
+                    return Ok(());
+                }
+                let max_len = batch.iter().map(|&i| lens[i]).max().unwrap_or(1).max(1);
+                let mut ids = Vec::with_capacity(batch.len() * max_len);
+                let mut mask = Vec::with_capacity(batch.len() * max_len);
+                for &i in batch.iter() {
+                    let e = &encodings[i];
+                    let n = lens[i];
+                    ids.extend(e.get_ids()[..n].iter().map(|&x| x as i64));
+                    mask.extend(e.get_attention_mask()[..n].iter().map(|&x| x as i64));
+                    ids.extend(std::iter::repeat_n(0i64, max_len - n));
+                    mask.extend(std::iter::repeat_n(0i64, max_len - n));
+                }
+                let vecs = this.run_batch(ids, mask, batch.len(), max_len)?;
+                for (&i, v) in batch.iter().zip(vecs) {
+                    out[i] = v;
+                }
+                batch.clear();
+                Ok(())
+            };
         for &i in &order {
             let candidate_max = lens[i].max(batch.iter().map(|&j| lens[j]).max().unwrap_or(0));
             if !batch.is_empty()
-                && ((batch.len() + 1) * candidate_max > self.max_batch_tokens
-                    || batch.len() >= 64)
+                && ((batch.len() + 1) * candidate_max > self.max_batch_tokens || batch.len() >= 64)
             {
                 flush(self, &mut batch, &mut out)?;
             }

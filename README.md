@@ -13,8 +13,11 @@ implementations of the same logic — across files, modules, and languages.
   touched function's nearest corpus neighbors and applies only your chosen
   threshold (a hard `DUP` fails `--check`; a `REVIEW` band just below it is
   advisory). No hidden cleverness — see caveat 1.
-- Rust, TypeScript, Python, Go, and Java today; one tree-sitter grammar +
-  ~30 lines per additional language.
+- Rust, TypeScript, Python, Go, Java, C#, PHP, Ruby, and C/C++ today; one
+  tree-sitter grammar + ~30 lines per additional language. (C/C++ caveat:
+  sources are parsed unpreprocessed, so function-like macros aren't
+  extracted as units and code hidden behind `#if` branches is seen as
+  written — heavy macro metaprogramming will slip through.)
 
 ## Why embeddings?
 
@@ -151,6 +154,14 @@ Doc comments are stripped before embedding (shared doc boilerplate inflates
 similarity). Test functions are tagged at extraction and excluded with
 `--skip-tests`.
 
+To go further, `semdup extract --strip-comments` (or `strip_comments = true`
+under `[extract]`) removes *all* comments and Python docstrings from unit
+text before hashing and embedding, so similarity reflects code alone rather
+than shared prose. Stripped and unstripped text hash differently, so the two
+variants coexist in the cache without cross-contamination; `semdup diff`
+follows the config setting so MR units are compared in the same form as the
+corpus.
+
 ### Embedding backends
 
 - **onnx** (default): loads a model directory produced by
@@ -175,7 +186,8 @@ that's what the harness is for.
 ## Evaluating on your own repo
 
 `eval/` contains the methodology and a ready-made benchmark against public
-corpora (ripgrep + vuejs/core, pinned SHAs):
+corpora (one pinned repo per language — see the provenance table in
+`eval/README.md`):
 
 ```bash
 eval/fetch-corpus.sh
@@ -203,5 +215,6 @@ no SLA.
 
 MIT OR Apache-2.0. Eval assets under `eval/injected/` are derived from
 ripgrep (MIT OR Unlicense), vuejs/core (MIT), pallets/flask (BSD-3-Clause),
-junegunn/fzf (MIT), and google/gson (Apache-2.0); each file carries its
+junegunn/fzf (MIT), google/gson (Apache-2.0), Newtonsoft.Json (MIT),
+guzzle (MIT), sinatra (MIT), jq (MIT), and fmt (MIT); each file carries its
 attribution.
