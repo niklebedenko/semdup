@@ -7,7 +7,6 @@
 //! above, the function signature. Thresholds are per repo and per model:
 //! dial one in by running `scan` at a few values against your own code.
 
-mod baseline;
 mod config;
 mod db;
 mod diff;
@@ -120,12 +119,6 @@ enum Cmd {
         /// three: pass 3 to see only logic that already exists 3+ times).
         #[arg(long)]
         min_cluster: Option<usize>,
-        /// Suppress pairs recorded in this baseline file.
-        #[arg(long)]
-        baseline: Option<PathBuf>,
-        /// Write current pairs to this baseline file instead of reporting.
-        #[arg(long)]
-        write_baseline: Option<PathBuf>,
     },
     /// Show nearest corpus neighbors for functions touched by a git diff (per-MR mode).
     Diff {
@@ -300,8 +293,6 @@ fn main() -> Result<()> {
             json,
             top,
             min_cluster,
-            baseline,
-            write_baseline,
         } => {
             // Keep the index current unless told not to; repos driving
             // extract/embed explicitly (no configured roots) scan as-is.
@@ -319,8 +310,6 @@ fn main() -> Result<()> {
                 json: json.as_deref(),
                 top,
                 min_cluster: min_cluster.or(cfg.scan.min_cluster).unwrap_or(2),
-                baseline: baseline.as_deref().or(cfg.scan.baseline.as_deref()),
-                write_baseline: write_baseline.as_deref(),
             };
             scan::run(&conn, &model, &opts)?;
         }

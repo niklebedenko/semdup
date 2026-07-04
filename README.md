@@ -79,10 +79,6 @@ for t in 0.55 0.60 0.65 0.70 0.75; do
   semdup scan --threshold $t | tail -1
 done
 
-# Adopt without triaging history: snapshot today's pairs, report only new ones
-semdup scan --write-baseline semdup-baseline.json
-semdup scan --baseline semdup-baseline.json
-
 # Review merge requests with neighbor evidence + your chosen threshold
 semdup diff --base origin/main --check
 ```
@@ -105,7 +101,6 @@ threshold = 0.625   # yours will differ: sweep a few values on your own repo
 min_lines = 8
 skip_tests = true
 # min_cluster = 3   # rule of three: only report 3+-member clusters
-baseline = "semdup-baseline.json"
 ```
 
 ## Suppressing a finding
@@ -119,8 +114,9 @@ code — within three lines above the signature (or on it):
 fn cache_read(...) { ... }
 ```
 
-Baseline entries expire when either function's body changes; ignore comments
-don't. Use ignores for permanent design decisions, baselines for "not today."
+Adopting on a codebase with existing duplication? Start with a high
+threshold, fix what it reports, and lower it in steps — each notch surfaces
+the next tier of candidates without burying you in day-one findings.
 
 ## How it works
 
