@@ -67,8 +67,8 @@ Labeling guidance:
 Calibration is per-repo *and* per-model: different codebases have different
 vocabulary overlap, and different models place the same pairs differently.
 Re-run after switching models. If calibrate reports a mushy optimum (wide
-plateau, poor balanced accuracy), trust `semdup diff`'s rank/margin verdicts
-over any absolute scan threshold.
+plateau, poor balanced accuracy), don't gate CI on the threshold at all —
+use `semdup diff` without `--check` and read its neighbor evidence by hand.
 
 ## Corpus provenance
 
