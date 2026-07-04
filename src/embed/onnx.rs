@@ -45,6 +45,14 @@ impl Onnx {
             use ort::execution_providers::{CUDAExecutionProvider, ExecutionProvider};
             let cuda = CUDAExecutionProvider::default();
             if cuda.is_available()? {
+                // A `cargo install`ed binary lacks the provider libraries
+                // onnxruntime dlopens from the executable's directory; link
+                // them in from ort's download cache before they're needed.
+                match super::provider_libs::ensure_next_to_exe() {
+                    Ok(Some(note)) => eprintln!("onnx backend: {note}"),
+                    Ok(None) => {}
+                    Err(e) => eprintln!("onnx backend: {e:#}"),
+                }
                 // error_on_failure: without it ort quietly falls back to CPU
                 // when the EP dylib can't load (e.g. cuDNN 9 missing), which
                 // looks identical to GPU mode but runs ~15x slower.

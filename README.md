@@ -1,11 +1,9 @@
 # semdup
 
-Embedding-based near-duplicate function detection for source code. semdup
-finds the clones token tools can't: renamed, restructured, and re-derived
-implementations of the same logic, across files, modules, and languages.
-Perfect for catching AI slop and preventing agents from constantly reimplementing
+Fuzzy-search tool for detecting code duplication. Perfect for catching AI slop and preventing agents from constantly reimplementing
 stuff.
 
+- **Robust.** Detects similarity by semantics, instead of grepping for token sequences. See `eval/` for benchmarks.
 - **Local-first.** Embeddings run on your machine (CPU or CUDA). Free and private.
 - **Configurable sensitivity.** Adjust the sensitivity of matching (1.0 = only
   near-byte-identical matches; typically 0.5-0.95 is the useful range). You can have separate thresholds
@@ -16,7 +14,37 @@ stuff.
   and C/C++; further extension is easy (contributions welcome!) *N.B. Heavily-macro'd C/C++
   code might not perform as well as the other languages.*
 
-## Why semdup? Why embeddings?
+I published this tool because I found it helpful for my own work. It's still young, so expect bugs. Contributions welcome!
+
+## Getting started
+
+Install (choose one option):
+
+```bash
+cargo install semdup                 # CPU inference
+cargo install semdup --features cuda # CUDA execution provider (falls back to CPU)
+```
+
+Run:
+
+```bash
+cd your-repo
+semdup init   # detects your source roots, writes semdup.toml, builds the index
+semdup scan   # report near-duplicate clusters
+semdup scan --threshold 0.95 --min-cluster 3   # more settings to play with
+semdup diff --base origin/main --check # built-in PR review mode
+```
+
+The `init` step can take some time (about 30s on my midrange GPU on a 500k-line repo).
+After the first initialisation, everything else is incremental and super fast.
+
+This tool uses fuzzy-search, so expect some false positives. Play around with the settings in the
+`semdup.toml` or use extra flags from `semdup scan --help` to fine-tune.
+
+Currently, the granularity of embeddings is in terms of functions, so this tool works best
+when your functions are all fairly small (200 lines is a good cap).
+
+## Why semdup?
 
 Copy-paste detectors (jscpd, PMD CPD, Simian) match token sequences, so they're brittle to slight refactorings that still preserve the functions' semantic purpose.
 semdup embeds each function with a code-retrieval model and compares
@@ -26,62 +54,7 @@ time.
 
 Similar tools like `slopo` require an external API. `semdup` keeps everything local.
 
-The limitation of this approach is that it is approximate, by design. Sometimes,
-things will land in the grey area, so that requires some judgement. Use the configurations
-to help reduce false-positives.
-
-## Install
-
-```bash
-cargo install semdup                 # CPU inference
-cargo install semdup --features cuda # CUDA execution provider (falls back to CPU)
-```
-
-That's it. The embedding model (an MIT-licensed ONNX export of
-nomic-ai/CodeRankEmbed) is downloaded automatically on first run —
-checksum-verified and cached in `~/.cache/semdup`. With CUDA, a smaller fp16
-variant is picked automatically. To bring your own model, see
-[docs/models.md](docs/models.md).
-
-The CUDA path needs cuDNN 9 on the library path at runtime (semdup prints a
-loud warning and falls back to CPU otherwise). If you have a CUDA build of
-torch installed, its bundled copy works:
-
-```bash
-export LD_LIBRARY_PATH=$(python3 -c 'import nvidia.cudnn,os;print(os.path.dirname(nvidia.cudnn.__file__)+"/lib")')
-```
-
-A ~6k-function corpus embeds cold in ~30 s on a midrange GPU (minutes on
-CPU); after that only changed functions re-embed.
-
 ## Quickstart
-
-```bash
-cd your-repo
-semdup init   # detects your source roots, writes semdup.toml, builds the index
-semdup scan   # report near-duplicate clusters
-```
-
-`scan` re-indexes changed functions automatically (content-hashed, so it's
-incremental; `--no-refresh` to skip). Everything else is tuning:
-
-```bash
-# Look at the obvious stuff first: near-exact clones
-semdup scan --threshold 0.95
-
-# Rule-of-three mode: only clusters where the logic already exists 3+ times
-# (the strongest candidates for extracting a shared helper)
-semdup scan --threshold 0.85 --min-cluster 3
-
-# Dial in your repo's threshold: sweep a few values, keep the one whose
-# report you'd act on (expect somewhere in 0.55-0.75 for code-retrieval models)
-for t in 0.55 0.60 0.65 0.70 0.75; do
-  semdup scan --threshold $t | tail -1
-done
-
-# Review merge requests with neighbor evidence + your chosen threshold
-semdup diff --base origin/main --check
-```
 
 Persistent settings live in `semdup.toml` at the repo root (discovered by
 walking up from the working directory); CLI flags override it. `init` writes
@@ -104,10 +77,6 @@ skip_tests = true
 ```
 
 ## Suppressing a finding
-
-Similarity is evidence, not a verdict. When two functions are similar *by
-design* (a read/write mirror, per-variant implementations), say so in the
-code — within three lines above the signature (or on it):
 
 ```rust
 // semdup:ignore — mirror of cache_write; symmetric by design
@@ -187,18 +156,21 @@ weekly and on any PR that touches the pipeline itself, seeded with
 pre-computed embeddings so runners only embed what changed, gating on
 recall@5 ≥ 0.9. The PR path proper just dogfoods semdup on its own source.
 
-## Status
-
-Early. The pipeline and evaluation harness are real and tested on a ~500k-line
-proprietary Rust/TS codebase (where the first scan found, among other things,
-a 41-line exact clone and a 20-member boilerplate cluster). API and report
-formats may still move. Solo-maintained; issues triaged weekly, PRs welcome,
-no SLA.
-
 ## License
 
-MIT OR Apache-2.0. Eval assets under `eval/injected/` are derived from
-ripgrep (MIT OR Unlicense), vuejs/core (MIT), pallets/flask (BSD-3-Clause),
-junegunn/fzf (MIT), google/gson (Apache-2.0), Newtonsoft.Json (MIT),
-guzzle (MIT), sinatra (MIT), jq (MIT), and fmt (MIT); each file carries its
-attribution.
+MIT or Apache-2.0, at your option.
+
+Eval assets under `eval/injected/` are derived from
+- ripgrep (MIT OR Unlicense),
+- vuejs/core (MIT),
+- pallets/flask (BSD-3-Clause),
+- junegunn/fzf (MIT),
+- google/gson (Apache-2.0),
+- Newtonsoft.Json (MIT),
+- guzzle (MIT),
+- sinatra (MIT), 
+- jq (MIT), and 
+- fmt (MIT).
+
+Each file carries its attribution.
+
