@@ -164,41 +164,49 @@ fn download_verified(asset: &Asset, dir: &std::path::Path) -> Result<()> {
              for exporting the model yourself)"
         )
     })?;
-    let mut reader = resp.into_reader();
-    let mut out = std::fs::File::create(&tmp)?;
-    let mut hasher = blake3::Hasher::new();
-    let mut buf = vec![0u8; 1 << 20];
-    let mut done: u64 = 0;
-    let mut last_report: u64 = 0;
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
+    // The tmp name is pid-unique, so nothing ever reclaims a leftover: on
+    // any failure past this point (stall, disk full, bad checksum) the file
+    // must be removed here or it accumulates in the cache forever.
+    let streamed = (|| -> Result<()> {
+        let mut reader = resp.into_reader();
+        let mut out = std::fs::File::create(&tmp)?;
+        let mut hasher = blake3::Hasher::new();
+        let mut buf = vec![0u8; 1 << 20];
+        let mut done: u64 = 0;
+        let mut last_report: u64 = 0;
+        loop {
+            let n = reader.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            out.write_all(&buf[..n])?;
+            done += n as u64;
+            if done - last_report >= 64 * 1024 * 1024 {
+                eprintln!(
+                    "  {} — {} / {} MB",
+                    asset.file,
+                    done / (1024 * 1024),
+                    asset.bytes / (1024 * 1024)
+                );
+                last_report = done;
+            }
         }
-        hasher.update(&buf[..n]);
-        out.write_all(&buf[..n])?;
-        done += n as u64;
-        if done - last_report >= 64 * 1024 * 1024 {
-            eprintln!(
-                "  {} — {} / {} MB",
-                asset.file,
-                done / (1024 * 1024),
-                asset.bytes / (1024 * 1024)
-            );
-            last_report = done;
-        }
-    }
-    out.flush()?;
-    drop(out);
-    let got = hasher.finalize().to_hex().to_string();
-    if got != asset.blake3 {
-        std::fs::remove_file(&tmp).ok();
-        bail!(
+        out.flush()?;
+        drop(out);
+        let got = hasher.finalize().to_hex().to_string();
+        ensure!(
+            got == asset.blake3,
             "checksum mismatch for {} (got {got}, want {}) — truncated or tampered download",
             asset.url_name,
             asset.blake3
         );
+        Ok(())
+    })();
+    if streamed.is_err() {
+        std::fs::remove_file(&tmp).ok();
     }
+    streamed?;
     std::fs::rename(&tmp, dir.join(asset.file))?;
     Ok(())
 }

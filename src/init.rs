@@ -160,26 +160,29 @@ fn list_files(dir: &Path) -> Result<Vec<PathBuf>> {
             .collect());
     }
     let mut abs = Vec::new();
-    walk(dir, &mut abs)?;
+    walk(dir, dir, &mut abs)?;
     Ok(abs
         .iter()
         .filter_map(|p| p.strip_prefix(dir).ok().map(PathBuf::from))
         .collect())
 }
 
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         // Same excludes the extractor will apply, so detected roots never
-        // point at directories extraction would skip anyway.
+        // point at directories extraction would skip anyway. Matched on the
+        // root-relative path (`./`-anchored): the absolute path would make a
+        // workspace that lives under /build/ or ~/vendor/ exclude everything.
+        let rel = path.strip_prefix(root).unwrap_or(&path);
         if name.starts_with('.')
-            || crate::extract::is_path_excluded(&format!("{}/", path.display()), &[])
+            || crate::extract::is_path_excluded(&format!("./{}/", rel.display()), &[])
         {
             continue;
         }
         if path.is_dir() {
-            walk(&path, out)?;
+            walk(root, &path, out)?;
         } else {
             out.push(path);
         }
@@ -282,6 +285,22 @@ mod tests {
         assert_eq!(roots, vec!["scripts".to_string(), "src".to_string()]);
         assert_eq!(by_lang.get("rust"), Some(&1));
         assert_eq!(by_lang.get("python"), Some(&1));
+    }
+
+    #[test]
+    fn fallback_walk_excludes_are_root_relative() {
+        // A workspace that itself lives under a directory named like a
+        // default exclude ("build") must not have everything excluded;
+        // its own target/ still must be.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("build").join("repo");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::write(root.join("src/a.rs"), "").unwrap();
+        std::fs::write(root.join("target/gen.rs"), "").unwrap();
+        let mut out = Vec::new();
+        walk(&root, &root, &mut out).unwrap();
+        assert_eq!(out, vec![root.join("src/a.rs")]);
     }
 
     #[test]
