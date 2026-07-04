@@ -6,6 +6,8 @@
 
 #[cfg(feature = "onnx")]
 pub mod onnx;
+#[cfg(feature = "cuda")]
+mod provider_libs;
 pub mod sidecar;
 
 use anyhow::Result;

@@ -54,6 +54,12 @@ export LD_LIBRARY_PATH=$(python3 -c 'import nvidia.cudnn,os;print(os.path.dirnam
 A ~6k-function corpus embeds cold in ~30 s on a midrange GPU (minutes on
 CPU); after that only changed functions re-embed.
 
+`cargo install` ships only the executable, so on first GPU use semdup links
+onnxruntime's CUDA provider libraries in from ort's build-time download cache
+(`~/.cache/ort.pyke.io`). That's automatic on the machine that ran the
+install; only a binary copied to a different machine needs the
+`libonnxruntime_providers_*.so` files placed next to it by hand.
+
 ## Quickstart
 
 ```bash
