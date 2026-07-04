@@ -35,13 +35,13 @@ jobs:
       - run: cargo build --release
 
       - name: Cache model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/semdup
           key: hosted-model-coderankembed-1
       - name: Cache embedding DB
         id: db-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: semdup.sqlite
           key: eval-db-1-${{ github.run_id }}

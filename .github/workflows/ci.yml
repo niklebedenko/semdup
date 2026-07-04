@@ -39,14 +39,14 @@ jobs:
       # The hosted model download is blake3-verified by semdup itself, so a
       # stale cache entry can never go undetected. Key on the release tag.
       - name: Cache model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/semdup
           key: hosted-model-coderankembed-1
       # Embeddings are cached by (model, content hash): with a restored DB
       # only functions touched since the last run re-embed.
       - name: Cache embedding DB
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: dogfood.sqlite
           key: dogfood-db-v1-${{ github.run_id }}
