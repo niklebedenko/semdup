@@ -72,6 +72,15 @@ pub fn run(
     if corpus.is_empty() {
         bail!("corpus is empty for model {model}; run `semdup extract` and `semdup embed` first");
     }
+    // Rank only against units scan would report on. touched_units applies
+    // these filters to the touched side already; without the corpus side a
+    // new function's own unit test (same vocabulary, is_test) or a
+    // semdup:ignore'd by-design mirror surfaces as its nearest neighbor and
+    // fails --check on duplication scan itself would never report.
+    let corpus: Vec<_> = corpus
+        .into_iter()
+        .filter(|(c, _)| rankable(c, opts.skip_tests))
+        .collect();
 
     let touched = touched_units(opts)?;
     if touched.is_empty() {
@@ -169,6 +178,13 @@ pub fn run(
         std::fs::write(path, serde_json::to_string_pretty(&reports)?)?;
     }
     Ok(findings)
+}
+
+/// Whether a corpus unit participates in neighbor ranking; mirrors the
+/// touched-side filters in `touched_units` (minus min_lines: a short helper
+/// is still a legitimate duplication source as a neighbor).
+fn rankable(c: &UnitRow, skip_tests: bool) -> bool {
+    !(c.ignored || skip_tests && c.is_test)
 }
 
 /// The corpus row for the touched function itself, from before the edit:
@@ -291,6 +307,23 @@ diff --git a/src/gone.rs b/src/gone.rs
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, "src/a.rs");
         assert_eq!(got[0].1, vec![(1, 4), (22, 22)]);
+    }
+
+    #[test]
+    fn ranking_skips_ignored_and_optionally_tests() {
+        let unit = |ignored, is_test| UnitRow {
+            path: "src/a.rs".into(),
+            name: "f".into(),
+            start_line: 1,
+            end_line: 10,
+            ignored,
+            is_test,
+        };
+        assert!(rankable(&unit(false, false), true));
+        assert!(!rankable(&unit(true, false), true));
+        assert!(!rankable(&unit(false, true), true));
+        assert!(rankable(&unit(false, true), false));
+        assert!(!rankable(&unit(true, true), false));
     }
 
     #[test]
