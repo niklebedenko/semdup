@@ -3,7 +3,8 @@
 Fuzzy-search tool for detecting code duplication. Perfect for catching AI slop and preventing agents from constantly reimplementing
 stuff.
 
-- **Robust.** Detects similarity by semantics, instead of grepping for token sequences. See `eval/` for benchmarks.
+- **Robust.** Detects similarity by semantics, instead of grepping for token
+  sequences. See `eval/README.md` for benchmark methodology and results.
 - **Local-first.** Embeddings run on your machine (CPU or CUDA). Free and private.
 - **Configurable sensitivity.** Adjust the sensitivity of matching (1.0 = only
   near-byte-identical matches; typically 0.5-0.95 is the useful range). You can have separate thresholds
@@ -31,9 +32,13 @@ Run:
 cd your-repo
 semdup init   # detects your source roots, writes semdup.toml, builds the index
 semdup scan   # report near-duplicate clusters
-semdup scan --threshold 0.95 --min-cluster 3   # more settings to play with
+semdup scan -t 0.95 -m 3   # threshold + 3-member minimum clusters
+semdup scan --show-bodies --top 1   # include source snippets for displayed clusters
 semdup diff --base origin/main --check # built-in PR review mode
 ```
+
+`semdup scan --show-bodies` syntax-highlights snippets when stdout is a
+terminal. Use `--color always` or `--color never` to override that.
 
 The `init` step can take some time (about 30s on my midrange GPU on a 500k-line repo).
 After the first initialisation, everything else is incremental and super fast.
@@ -41,20 +46,20 @@ After the first initialisation, everything else is incremental and super fast.
 This tool uses fuzzy-search, so expect some false positives. Play around with the settings in the
 `semdup.toml` or use extra flags from `semdup scan --help` to fine-tune.
 
-Currently, the granularity of embeddings is in terms of functions, so this tool works best
-when your functions are all fairly small (200 lines is a good cap).
+By default, embeddings include functions and executable blocks inside
+functions. Use `granularity = ["function"]` for function-only indexing.
 
-## Why semdup?
+## Why `semdup`?
 
-Copy-paste detectors (jscpd, PMD CPD, Simian) match token sequences, so they're brittle to slight refactorings that still preserve the functions' semantic purpose.
-semdup embeds each function with a code-retrieval model and compares
-meanings. In our planted-clone benchmark, fully *re-derived* implementations
-(same spec, written fresh) still surface in the top-5 neighbors 92% of the
-time.
+Copy-paste detectors (jscpd, PMD CPD, Simian, `dupehound`) match token sequences, so they're
+brittle to slight refactorings that still preserve the functions' semantic purpose.
+`semdup` embeds each function with a code-retrieval model and compares
+meanings. The planted-clone benchmark checks this against rewrites in pinned
+public corpora; see `eval/README.md` for the current numbers.
 
 Similar tools like `slopo` require an external API. `semdup` keeps everything local.
 
-## Quickstart
+## Settings
 
 Persistent settings live in `semdup.toml` at the repo root (discovered by
 walking up from the working directory); CLI flags override it. `init` writes
@@ -65,14 +70,20 @@ db = "semdup.sqlite"
 
 [extract]
 roots = ["src", "lib"]
+respect_gitignore = true # default: skip files ignored by git
+# granularity = ["function"] # optional: function-only indexing
+# min_block_lines = 8                 # extraction-time block noise/cost guard
 
 # [embed] is only needed to swap models or backends (see docs/models.md);
 # the default model is fetched automatically.
+# provider = "auto"  # auto | cpu | cuda
 
 [scan]
 threshold = 0.625   # yours will differ: sweep a few values on your own repo
 min_lines = 8
 skip_tests = true
+index = "exact"     # exact | sparse | auto
+# unit_kind = "block" # function | block; omit to scan all extracted units
 # min_cluster = 3   # rule of three: only report 3+-member clusters
 ```
 
@@ -90,19 +101,35 @@ the next tier of candidates without burying you in day-one findings.
 ## How it works
 
 ```
-extract   tree-sitter → function units → SQLite (content-hash keyed)
+extract   tree-sitter → function/block units → SQLite (content-hash keyed)
 embed     ONNX Runtime (CUDA→CPU) or python sidecar → cached vectors
-scan      exact pairwise cosine (rayon) → union-find clusters → report
+scan      candidate search → exact cosine rerank → union-find clusters → report
 diff      git diff → touched units → top-3 neighbors + threshold verdicts
 ```
 
-There is no approximate index: on an 8k-function corpus a full scan is one
-parallel matmul, ~0.3 s. Embedding the whole corpus cold is minutes on CPU
-and tens of seconds on a GPU; after that only changed functions re-embed.
+The default scan index is `exact`: every pair is compared with dense cosine
+using blocked CPU matrix multiplication, so it does not drop matches. For very
+large repos, `semdup scan --index sparse` builds a sparse-random-projection LSH
+candidate index and then reranks those candidates with the same dense cosine
+score. That mode is approximate, so it can miss pairs that exact search would
+find, but it avoids the quadratic all-pairs pass. `--index auto` keeps exact
+search below 20k scannable units and switches to sparse search above that.
+
+For development experiments, `scripts/bench_scan_gpu.py` benchmarks an exact
+CUDA matrix-multiply scan against an existing `semdup.sqlite` cache. It is not
+part of the runtime dependency set.
+
+Embedding the whole corpus cold is minutes on CPU and tens of seconds on a GPU;
+after that only changed units re-embed.
 
 Doc comments are stripped before embedding (shared doc boilerplate inflates
 similarity). Test functions are tagged at extraction and excluded with
 `--skip-tests`.
+
+When block granularity is enabled, scan ignores larger block units that overlap
+smaller block units from the same file. This keeps nested blocks from counting
+as extra duplicate members of themselves. Non-overlapping duplicates in the
+same file are still reported.
 
 To go further, `semdup extract --strip-comments` (or `strip_comments = true`
 under `[extract]`) removes *all* comments and Python docstrings from unit
@@ -128,49 +155,20 @@ model-specific.
 
 ### Choosing a model
 
-Run the bake-off yourself; it's one `inject-eval` per candidate. On our
-benchmarks, **nomic-ai/CodeRankEmbed** (137M params)
-beat embedding models 4× its size on class separation — code-contrastive
-training matters more than scale. Expect newer models to win eventually;
-that's what the harness is for.
+The default model is **nomic-ai/CodeRankEmbed**. See `docs/models.md` for the
+hosted ONNX export, cache behavior, and bring-your-own-model setup. Use
+`eval/README.md` to benchmark candidate models before trusting their scan
+thresholds.
 
-## Evaluating on your own repo
+## Benchmarks
 
-`eval/` contains the methodology and a ready-made benchmark against public
-corpora (one pinned repo per language — see the provenance table in
-`eval/README.md`):
-
-```bash
-eval/fetch-corpus.sh
-semdup extract --root eval/corpus --corpus main
-semdup extract --root eval/injected --corpus injected
-semdup embed
-semdup inject-eval --manifest eval/manifest.json --min-recall5 0.9
-```
-
-This measures recall@1/@5 of planted rewrites at three mutation levels
-(rename-only / restructured / re-derived) — the numbers that tell you whether
-a model actually works before you trust its scan output. See `eval/README.md`
-for the methodology and for extending the benchmark. CI runs this end-to-end
-weekly and on any PR that touches the pipeline itself, seeded with
-pre-computed embeddings so runners only embed what changed, gating on
-recall@5 ≥ 0.9. The PR path proper just dogfoods semdup on its own source.
+`eval/README.md` contains the planted-clone methodology, run commands, current
+default-model results, F1 convention, corpus provenance, and extension notes.
 
 ## License
 
 MIT or Apache-2.0, at your option.
 
-Eval assets under `eval/injected/` are derived from
-- ripgrep (MIT OR Unlicense),
-- vuejs/core (MIT),
-- pallets/flask (BSD-3-Clause),
-- junegunn/fzf (MIT),
-- google/gson (Apache-2.0),
-- Newtonsoft.Json (MIT),
-- guzzle (MIT),
-- sinatra (MIT), 
-- jq (MIT), and 
-- fmt (MIT).
-
-Each file carries its attribution.
-
+Eval assets under `eval/injected/` are derived from third-party projects; see
+`eval/README.md` for the full provenance and license table. Each file carries
+its attribution.

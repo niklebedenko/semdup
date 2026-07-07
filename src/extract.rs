@@ -1,13 +1,49 @@
+//! Source-code extraction built on tree-sitter grammars.
+//!
+//! The extractor walks supported files, turns function-like syntax nodes into
+//! hash-addressed units, and tags suppression directives and tests so later
+//! scan modes can filter them consistently.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
+use ignore::WalkBuilder;
+use serde::Deserialize;
 use tree_sitter::{Node, Parser};
+
+const DEFAULT_MIN_BLOCK_LINES: usize = 8;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum UnitKind {
+    Function,
+    Block,
+}
+
+impl UnitKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnitKind::Function => "function",
+            UnitKind::Block => "block",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "function" => Some(UnitKind::Function),
+            "block" => Some(UnitKind::Block),
+            _ => None,
+        }
+    }
+}
 
 pub struct Unit {
     pub path: String,
     pub name: String,
     pub lang: String,
+    pub kind: UnitKind,
     pub start_line: usize,
     pub end_line: usize,
     pub hash: String,
@@ -24,11 +60,6 @@ impl Unit {
 
 const DEFAULT_EXCLUDES: &[&str] = &[
     "/.git/",
-    "/target/",
-    "/node_modules/",
-    "/dist/",
-    "/vendor/",
-    "/build/",
     // semdup's own eval assets must never join a real corpus: `eval/injected`
     // holds planted clones, `eval/corpus` holds third-party checkouts.
     "/eval/injected/",
@@ -36,6 +67,31 @@ const DEFAULT_EXCLUDES: &[&str] = &[
 ];
 
 const IGNORE_DIRECTIVE: &str = "semdup:ignore";
+
+#[derive(Clone)]
+pub struct ExtractOpts {
+    pub strip_comments: bool,
+    pub respect_gitignore: bool,
+    pub granularity: Vec<UnitKind>,
+    pub min_block_lines: usize,
+}
+
+impl Default for ExtractOpts {
+    fn default() -> Self {
+        ExtractOpts {
+            strip_comments: false,
+            respect_gitignore: true,
+            granularity: vec![UnitKind::Function, UnitKind::Block],
+            min_block_lines: DEFAULT_MIN_BLOCK_LINES,
+        }
+    }
+}
+
+impl ExtractOpts {
+    fn includes(&self, kind: UnitKind) -> bool {
+        self.granularity.contains(&kind)
+    }
+}
 
 /// File extensions `extract_file` knows how to parse (see the language table
 /// there for how each maps to a grammar).
@@ -47,11 +103,11 @@ pub const SUPPORTED_EXTS: &[&str] = &[
 pub fn extract_roots(
     roots: &[PathBuf],
     extra_excludes: &[String],
-    strip_comments: bool,
+    opts: ExtractOpts,
 ) -> Result<Vec<Unit>> {
     let mut files = Vec::new();
     for root in roots {
-        collect_files(root, extra_excludes, &mut files)?;
+        collect_files(root, extra_excludes, opts.respect_gitignore, &mut files)?;
     }
     files.sort();
     let mut units = Vec::new();
@@ -61,7 +117,7 @@ pub fn extract_roots(
             Err(_) => continue, // non-utf8 or unreadable: skip
         };
         units.extend(
-            extract_file(file, &src, strip_comments)
+            extract_file_with_opts(file, &src, &opts)
                 .with_context(|| format!("extracting {}", file.display()))?,
         );
     }
@@ -69,17 +125,65 @@ pub fn extract_roots(
 }
 
 /// Substring match against the default and configured exclude patterns.
-/// Callers control anchoring via the string they pass: `collect_files`
-/// passes root-relative paths with a trailing `/` and no leading one (so
-/// `/eval/corpus/` never matches inside an explicit `--root eval/corpus`),
-/// while diff passes repo-relative file paths prefixed with `/` so
-/// patterns anchor at the repo root.
+/// Callers control anchoring via the string they pass: extraction walkers use
+/// display paths with a trailing `/`, while diff passes repo-relative file
+/// paths prefixed with `/` so patterns anchor at the repo root.
 pub fn is_path_excluded(path_str: &str, extra_excludes: &[String]) -> bool {
     DEFAULT_EXCLUDES.iter().any(|e| path_str.contains(e))
         || extra_excludes.iter().any(|e| path_str.contains(e.as_str()))
 }
 
-fn collect_files(dir: &Path, extra_excludes: &[String], out: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_files(
+    dir: &Path,
+    extra_excludes: &[String],
+    respect_gitignore: bool,
+    out: &mut Vec<PathBuf>,
+) -> Result<()> {
+    if respect_gitignore {
+        collect_files_gitignore(dir, extra_excludes, out)
+    } else {
+        collect_files_plain(dir, extra_excludes, out)
+    }
+}
+
+fn collect_files_gitignore(
+    dir: &Path,
+    extra_excludes: &[String],
+    out: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let mut builder = WalkBuilder::new(dir);
+    let extra_excludes = extra_excludes.to_vec();
+    builder
+        .hidden(false)
+        .parents(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .require_git(false)
+        .ignore(false)
+        .filter_entry(move |entry| {
+            !is_path_excluded(&format!("{}/", entry.path().display()), &extra_excludes)
+        });
+    for entry in builder.build() {
+        let entry = entry.with_context(|| format!("walking {}", dir.display()))?;
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| SUPPORTED_EXTS.contains(&e))
+        {
+            out.push(path.to_path_buf());
+        }
+    }
+    Ok(())
+}
+
+fn collect_files_plain(
+    dir: &Path,
+    extra_excludes: &[String],
+    out: &mut Vec<PathBuf>,
+) -> Result<()> {
     for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();
         let path_str = format!("{}/", path.display());
@@ -87,7 +191,7 @@ fn collect_files(dir: &Path, extra_excludes: &[String], out: &mut Vec<PathBuf>) 
             continue;
         }
         if path.is_dir() {
-            collect_files(&path, extra_excludes, out)?;
+            collect_files_plain(&path, extra_excludes, out)?;
         } else if path
             .extension()
             .and_then(|e| e.to_str())
@@ -100,6 +204,18 @@ fn collect_files(dir: &Path, extra_excludes: &[String], out: &mut Vec<PathBuf>) 
 }
 
 pub fn extract_file(path: &Path, src: &str, strip_comments: bool) -> Result<Vec<Unit>> {
+    extract_file_with_opts(
+        path,
+        src,
+        &ExtractOpts {
+            strip_comments,
+            granularity: vec![UnitKind::Function],
+            ..ExtractOpts::default()
+        },
+    )
+}
+
+pub fn extract_file_with_opts(path: &Path, src: &str, opts: &ExtractOpts) -> Result<Vec<Unit>> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let (language, lang_name) = match ext {
         "rs" => (tree_sitter_rust::LANGUAGE.into(), "rust"),
@@ -141,10 +257,18 @@ pub fn extract_file(path: &Path, src: &str, strip_comments: bool) -> Result<Vec<
         &path_str,
         lang_name,
         path_is_test,
-        strip_comments,
+        opts,
+        None,
         &mut units,
     );
     Ok(units)
+}
+
+#[derive(Clone)]
+struct FunctionContext {
+    name: String,
+    ignored: bool,
+    is_test: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -155,29 +279,62 @@ fn walk(
     path: &str,
     lang: &str,
     path_is_test: bool,
-    strip_comments: bool,
+    opts: &ExtractOpts,
+    function_context: Option<&FunctionContext>,
     out: &mut Vec<Unit>,
 ) {
+    let mut child_context = function_context.cloned();
     if let Some((name, span_node)) = unit_of(node, src, lang) {
-        let start_line = span_node.start_position().row + 1;
-        let end_line = span_node.end_position().row + 1;
-        let text = if strip_comments {
-            stripped_text(span_node, src, lang)
-        } else {
-            src[span_node.byte_range()].to_string()
-        };
-        out.push(Unit {
-            path: path.to_string(),
+        let ignored = has_ignore_directive(lines, span_node.start_position().row + 1);
+        let is_test = path_is_test || is_test_node(node, src, lang);
+        if opts.includes(UnitKind::Function) {
+            push_unit(
+                out,
+                UnitSpec {
+                    path,
+                    name: name.clone(),
+                    lang,
+                    kind: UnitKind::Function,
+                    span_node,
+                    src,
+                    lines,
+                    strip_comments: opts.strip_comments,
+                    ignored,
+                    is_test,
+                    min_lines: 1,
+                },
+            );
+        }
+        child_context = Some(FunctionContext {
             name,
-            lang: lang.to_string(),
-            start_line,
-            end_line,
-            hash: blake3::hash(text.as_bytes()).to_hex().to_string(),
-            text,
-            ignored: has_ignore_directive(lines, start_line),
-            is_test: path_is_test || is_test_node(node, src, lang),
+            ignored,
+            is_test,
         });
     }
+
+    if opts.includes(UnitKind::Block)
+        && let Some(ctx) = function_context
+        && is_executable_block(node, lang)
+    {
+        let start_line = node.start_position().row + 1;
+        push_unit(
+            out,
+            UnitSpec {
+                path,
+                name: format!("{}::{}", ctx.name, block_name(node)),
+                lang,
+                kind: UnitKind::Block,
+                span_node: node,
+                src,
+                lines,
+                strip_comments: opts.strip_comments,
+                ignored: ctx.ignored || has_ignore_directive(lines, start_line),
+                is_test: path_is_test || ctx.is_test,
+                min_lines: opts.min_block_lines,
+            },
+        );
+    }
+
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         walk(
@@ -187,9 +344,92 @@ fn walk(
             path,
             lang,
             path_is_test,
-            strip_comments,
+            opts,
+            child_context.as_ref(),
             out,
         );
+    }
+}
+
+struct UnitSpec<'a> {
+    path: &'a str,
+    name: String,
+    lang: &'a str,
+    kind: UnitKind,
+    span_node: Node<'a>,
+    src: &'a str,
+    lines: &'a [&'a str],
+    strip_comments: bool,
+    ignored: bool,
+    is_test: bool,
+    min_lines: usize,
+}
+
+fn push_unit(out: &mut Vec<Unit>, spec: UnitSpec<'_>) {
+    let start_line = spec.span_node.start_position().row + 1;
+    let end_line = spec.span_node.end_position().row + 1;
+    if end_line.saturating_sub(start_line) + 1 < spec.min_lines {
+        return;
+    }
+    let text = if spec.strip_comments {
+        stripped_text(spec.span_node, spec.src, spec.lang)
+    } else {
+        spec.src[spec.span_node.byte_range()].to_string()
+    };
+    if text.trim().is_empty() {
+        return;
+    }
+    out.push(Unit {
+        path: spec.path.to_string(),
+        name: spec.name,
+        lang: spec.lang.to_string(),
+        kind: spec.kind,
+        start_line,
+        end_line,
+        hash: blake3::hash(text.as_bytes()).to_hex().to_string(),
+        text,
+        ignored: spec.ignored || has_ignore_directive(spec.lines, start_line),
+        is_test: spec.is_test,
+    });
+}
+
+fn is_executable_block(node: Node, lang: &str) -> bool {
+    let kind = node.kind();
+    match lang {
+        "rust" => matches!(kind, "block" | "match_block"),
+        "typescript" => kind == "statement_block",
+        "python" => kind == "block",
+        "go" | "java" | "csharp" => kind == "block",
+        "php" | "c" | "cpp" => kind == "compound_statement",
+        // Ruby has several body-like nodes, but they do not map as cleanly to
+        // a single executable block; leave it function-only for now.
+        _ => false,
+    }
+}
+
+fn block_name(node: Node) -> &'static str {
+    let Some(parent) = node.parent() else {
+        return "block";
+    };
+    match parent.kind() {
+        "if_expression" | "if_statement" => "if",
+        "else_clause" => "else",
+        "for_expression" | "for_statement" | "for_in_clause" => "for",
+        "while_expression" | "while_statement" => "while",
+        "loop_expression" => "loop",
+        "match_expression" | "switch_expression" | "switch_statement" => "match",
+        "try_statement" | "try_expression" => "try",
+        "catch_clause" | "except_clause" => "catch",
+        "function_item"
+        | "function_definition"
+        | "function_declaration"
+        | "generator_function_declaration"
+        | "method_definition"
+        | "method_declaration"
+        | "constructor_declaration"
+        | "local_function_statement" => "body",
+        "arrow_function" | "function_expression" | "closure_expression" => "closure",
+        _ => "block",
     }
 }
 
@@ -469,12 +709,74 @@ mod tests {
         let extra = vec!["/.github/".to_string()];
         // diff convention: repo-relative file path with a leading `/`.
         assert!(is_path_excluded("/.github/smoke/plant.rs", &extra));
-        assert!(is_path_excluded("/src/vendor/lib.rs", &[]));
+        assert!(is_path_excluded("/.git/hooks/post-commit", &[]));
+        assert!(!is_path_excluded("/src/vendor/lib.rs", &[]));
         assert!(!is_path_excluded("/src/main.rs", &extra));
         // collect_files convention: no leading slash, so a default exclude
         // does not fire when it is itself the explicit root.
         assert!(!is_path_excluded("eval/corpus/flask/app.py/", &[]));
         assert!(is_path_excluded("repo/eval/corpus/flask/app.py/", &[]));
+    }
+
+    #[test]
+    fn extract_roots_respects_gitignore_by_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(".gitignore"), "generated/\n").unwrap();
+        std::fs::create_dir(tmp.path().join("src")).unwrap();
+        std::fs::create_dir(tmp.path().join("generated")).unwrap();
+        std::fs::write(tmp.path().join("src/lib.rs"), "fn kept() {}\n").unwrap();
+        std::fs::write(tmp.path().join("generated/out.rs"), "fn ignored() {}\n").unwrap();
+        let roots = vec![tmp.path().to_path_buf()];
+
+        let respected = extract_roots(
+            &roots,
+            &[],
+            ExtractOpts {
+                strip_comments: false,
+                respect_gitignore: true,
+                ..ExtractOpts::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(respected.len(), 1);
+        assert_eq!(respected[0].name, "kept");
+
+        let ignored_disabled = extract_roots(
+            &roots,
+            &[],
+            ExtractOpts {
+                strip_comments: false,
+                respect_gitignore: false,
+                ..ExtractOpts::default()
+            },
+        )
+        .unwrap();
+        let mut names: Vec<_> = ignored_disabled.iter().map(|u| u.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["ignored", "kept"]);
+    }
+
+    #[test]
+    fn extract_roots_forwards_block_granularity() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("lib.rs"),
+            "fn kept(xs: &[u32]) -> u32 {\n    for x in xs {\n        if *x > 1 {\n            return *x;\n        }\n    }\n    0\n}\n",
+        )
+        .unwrap();
+        let roots = vec![tmp.path().to_path_buf()];
+        let units = extract_roots(
+            &roots,
+            &[],
+            ExtractOpts {
+                granularity: vec![UnitKind::Function, UnitKind::Block],
+                min_block_lines: 1,
+                ..ExtractOpts::default()
+            },
+        )
+        .unwrap();
+        assert!(units.iter().any(|u| u.kind == UnitKind::Function));
+        assert!(units.iter().any(|u| u.kind == UnitKind::Block));
     }
 
     #[test]
@@ -506,6 +808,44 @@ mod tests {
         assert!(by_name("check").is_test);
         assert_eq!(by_name("read_thing").start_line, 3);
         assert_eq!(by_name("read_thing").end_line, 5);
+    }
+
+    #[test]
+    fn rust_block_granularity_extracts_nested_executable_blocks() {
+        let src = r#"
+// semdup:ignore - duplicated state machine by design
+fn outer(xs: &[u32]) -> u32 {
+    let mut sum = 0;
+    for x in xs {
+        if *x > 10 {
+            sum += x;
+        }
+    }
+    sum
+}
+"#;
+        let units = extract_file_with_opts(
+            Path::new("lib.rs"),
+            src,
+            &ExtractOpts {
+                strip_comments: false,
+                granularity: vec![UnitKind::Function, UnitKind::Block],
+                min_block_lines: 1,
+                ..ExtractOpts::default()
+            },
+        )
+        .unwrap();
+        let function = units
+            .iter()
+            .find(|u| u.kind == UnitKind::Function && u.name == "outer")
+            .unwrap();
+        assert!(function.ignored);
+        let blocks: Vec<_> = units.iter().filter(|u| u.kind == UnitKind::Block).collect();
+        assert!(blocks.len() >= 3);
+        assert!(blocks.iter().all(|u| u.ignored));
+        assert!(blocks.iter().any(|u| u.name == "outer::body"));
+        assert!(blocks.iter().any(|u| u.name == "outer::for"));
+        assert!(blocks.iter().any(|u| u.name == "outer::if"));
     }
 
     #[test]

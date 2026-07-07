@@ -1,0 +1,17 @@
+[
+  {
+    "file": "block_patterns_reader_l1.rs",
+    "original": "crates/cli/src/pattern.rs:146-155::patterns_from_reader::match",
+    "level": 1
+  },
+  {
+    "file": "block_patterns_reader_l2.rs",
+    "original": "crates/cli/src/pattern.rs:146-155::patterns_from_reader::match",
+    "level": 2
+  },
+  {
+    "file": "block_patterns_reader_l3.rs",
+    "original": "crates/cli/src/pattern.rs:146-155::patterns_from_reader::match",
+    "level": 3
+  }
+]

@@ -30,6 +30,8 @@ jobs:
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      DOGFOOD_THRESHOLD: "0.85"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -57,7 +59,9 @@ jobs:
       - name: Scan own source (advisory)
         run: |
           set -o pipefail
-          target/release/semdup --db dogfood.sqlite scan | tee -a "$GITHUB_STEP_SUMMARY"
+          target/release/semdup --db dogfood.sqlite scan \
+            --threshold "$DOGFOOD_THRESHOLD" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Self-contained end-to-end check: pretend a PR adds a rename-only
       # clone of extract.rs's c_function_name; the original must surface as
@@ -78,6 +82,8 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           git fetch --depth 1 origin "$BASE_REF"
-          target/release/semdup --db dogfood.sqlite diff --base "origin/$BASE_REF" --check
+          target/release/semdup --db dogfood.sqlite diff --base "origin/$BASE_REF" \
+            --threshold "$DOGFOOD_THRESHOLD" \
+            --check
         env:
           BASE_REF: ${{ github.base_ref }}

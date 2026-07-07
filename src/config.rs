@@ -7,10 +7,16 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+use crate::extract::UnitKind;
+
 /// The model used when neither CLI nor config names one; the onnx backend
 /// auto-downloads its hosted export (fetch.rs). Lives here rather than in
 /// fetch so slim (non-onnx) builds still resolve the same default name.
 pub const DEFAULT_MODEL: &str = "nomic-ai/CodeRankEmbed";
+
+/// Hosted dynamic-int8 CPU export of the default model. This gets an explicit
+/// cache key so its embeddings do not collide with the default fp32/fp16 keys.
+pub const CPU_INT8_MODEL: &str = "nomic-ai/CodeRankEmbed@cpu-int8-dynamic";
 
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -30,8 +36,14 @@ pub struct Config {
 pub struct Extract {
     pub roots: Option<Vec<PathBuf>>,
     pub exclude: Option<Vec<String>>,
+    /// Respect .gitignore and related git exclude files while walking roots.
+    pub respect_gitignore: Option<bool>,
     /// Strip comments and Python docstrings from unit text before embedding.
     pub strip_comments: Option<bool>,
+    /// Unit granularities to extract. Default: ["function", "block"].
+    pub granularity: Option<Vec<UnitKind>>,
+    /// Do not extract executable block units shorter than this many lines.
+    pub min_block_lines: Option<usize>,
 }
 
 #[derive(Deserialize, Default)]
@@ -41,6 +53,8 @@ pub struct Embed {
     pub model: Option<String>,
     /// "onnx" (built-in) or "sidecar" (external python script).
     pub backend: Option<String>,
+    /// ONNX execution provider: "auto", "cpu", or "cuda".
+    pub provider: Option<String>,
     /// ONNX backend: directory holding model.onnx + tokenizer.json + semdup-model.json.
     pub model_dir: Option<PathBuf>,
     /// Sidecar backend: script path.
@@ -52,8 +66,12 @@ pub struct Embed {
 pub struct Scan {
     /// Cosine threshold; per repo and per model, so dial it in on your own code.
     pub threshold: Option<f32>,
+    /// Candidate search index: "exact", "sparse", or "auto".
+    pub index: Option<String>,
     pub min_lines: Option<usize>,
     pub skip_tests: Option<bool>,
+    /// Limit scans to one unit kind: "function" or "block".
+    pub unit_kind: Option<UnitKind>,
     /// Only report clusters with at least this many members.
     pub min_cluster: Option<usize>,
 }
@@ -107,12 +125,18 @@ mod tests {
             db = "cache.sqlite"
             [extract]
             roots = ["src", "/abs/lib"]
+            respect_gitignore = false
+            granularity = ["function", "block"]
+            min_block_lines = 10
             [embed]
             model = "nomic-ai/CodeRankEmbed"
             backend = "onnx"
+            provider = "cpu"
             [scan]
             threshold = 0.625
+            index = "sparse"
             skip_tests = true
+            unit_kind = "block"
             "#,
         )
         .unwrap();
@@ -122,7 +146,16 @@ mod tests {
         let roots = cfg.extract.roots.unwrap();
         assert_eq!(roots[0], Path::new("/repo/src"));
         assert_eq!(roots[1], Path::new("/abs/lib"));
+        assert_eq!(cfg.extract.respect_gitignore, Some(false));
+        assert_eq!(
+            cfg.extract.granularity.as_deref(),
+            Some(&[UnitKind::Function, UnitKind::Block][..])
+        );
+        assert_eq!(cfg.extract.min_block_lines, Some(10));
+        assert_eq!(cfg.embed.provider.as_deref(), Some("cpu"));
         assert_eq!(cfg.scan.threshold, Some(0.625));
+        assert_eq!(cfg.scan.index.as_deref(), Some("sparse"));
+        assert_eq!(cfg.scan.unit_kind, Some(UnitKind::Block));
     }
 
     #[test]

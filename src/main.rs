@@ -2,7 +2,7 @@
 //!
 //! Pipeline: tree-sitter extraction -> SQLite unit+embedding cache
 //! -> embedding (built-in ONNX Runtime backend, or a python sidecar for
-//! arbitrary models) -> exact pairwise cosine -> clustered report.
+//! arbitrary models) -> candidate search with exact scoring -> clustered report.
 //! Suppression: put `semdup:ignore` in a comment on, or up to three lines
 //! above, the function signature. Thresholds are per repo and per model:
 //! dial one in by running `scan` at a few values against your own code.
@@ -49,6 +49,9 @@ struct EmbedArgs {
     /// "onnx" (built-in) or "sidecar" (external script).
     #[arg(long)]
     backend: Option<String>,
+    /// ONNX execution provider: auto, cpu, or cuda.
+    #[arg(long)]
+    provider: Option<String>,
     /// ONNX backend: directory with model.onnx + tokenizer.json + semdup-model.json.
     #[arg(long)]
     model_dir: Option<PathBuf>,
@@ -82,11 +85,24 @@ enum Cmd {
         /// Path substrings to skip in addition to the built-in excludes.
         #[arg(long)]
         exclude: Vec<String>,
+        /// Respect .gitignore and related git exclude files while walking roots.
+        #[arg(long, conflicts_with = "no_respect_gitignore")]
+        respect_gitignore: bool,
+        /// Include files even when git ignore rules would skip them.
+        #[arg(long)]
+        no_respect_gitignore: bool,
         /// Strip comments and Python docstrings from unit text before
         /// hashing/embedding: compares meaning of code alone, and shows how
         /// much of the similarity signal is prose.
         #[arg(long)]
         strip_comments: bool,
+        /// Unit granularity to extract. Repeat for multiple values; defaults to
+        /// functions plus executable blocks.
+        #[arg(long, value_enum)]
+        granularity: Vec<extract::UnitKind>,
+        /// Do not extract executable block units shorter than this many lines.
+        #[arg(long)]
+        min_block_lines: Option<usize>,
     },
     /// Embed all units that lack a vector for the configured model.
     Embed {
@@ -101,23 +117,35 @@ enum Cmd {
         #[command(flatten)]
         embed: EmbedArgs,
         /// Cosine threshold; dial in by trying a few values on your repo.
-        #[arg(long)]
+        #[arg(short = 't', long)]
         threshold: Option<f32>,
+        /// Candidate search index: exact, sparse, or auto.
+        #[arg(long)]
+        index: Option<String>,
         /// Ignore units shorter than this many lines.
         #[arg(long)]
         min_lines: Option<usize>,
         /// Exclude test code from the scan.
         #[arg(long)]
         skip_tests: bool,
+        /// Limit the scan to one extracted unit kind.
+        #[arg(long, value_enum)]
+        unit_kind: Option<extract::UnitKind>,
         /// Also write the full pair list as JSON here.
         #[arg(long)]
         json: Option<PathBuf>,
+        /// Print the source body for each displayed duplicate candidate.
+        #[arg(long)]
+        show_bodies: bool,
+        /// When to syntax-highlight snippet bodies: auto, always, or never.
+        #[arg(long, value_enum, default_value_t = scan::ColorChoice::Auto)]
+        color: scan::ColorChoice,
         /// Cap the number of clusters printed.
         #[arg(long, default_value_t = 50)]
         top: usize,
         /// Only report clusters with at least this many members (rule of
         /// three: pass 3 to see only logic that already exists 3+ times).
-        #[arg(long)]
+        #[arg(short = 'm', long)]
         min_cluster: Option<usize>,
     },
     /// Show nearest corpus neighbors for functions touched by a git diff (per-MR mode).
@@ -128,7 +156,7 @@ enum Cmd {
         #[arg(long)]
         min_lines: Option<usize>,
         /// Threshold for DUP/REVIEW verdicts; omit for evidence-only output.
-        #[arg(long)]
+        #[arg(short = 't', long)]
         threshold: Option<f32>,
         #[arg(long)]
         skip_tests: bool,
@@ -144,14 +172,23 @@ enum Cmd {
     InjectEval {
         #[arg(long)]
         model: Option<String>,
+        /// Label to use in --summary-row output.
+        #[arg(long)]
+        label: Option<String>,
         /// JSON: [{"file": "...", "original": "path::name", "level": 1}, ..]
         #[arg(long)]
         manifest: PathBuf,
         #[arg(long)]
         min_lines: Option<usize>,
+        /// Evaluate this extracted unit kind.
+        #[arg(long, value_enum, default_value_t = extract::UnitKind::Function)]
+        unit_kind: extract::UnitKind,
         /// Exit nonzero if any level's recall@5 falls below this (for CI).
         #[arg(long)]
         min_recall5: Option<f32>,
+        /// Print one Markdown table row for the cross-model eval matrix.
+        #[arg(long)]
+        summary_row: bool,
     },
     /// Print unit/embedding counts.
     Status,
@@ -181,6 +218,11 @@ fn make_backend(args: &EmbedArgs, cfg: &Config, model: &str) -> Result<Box<dyn e
     match backend.as_str() {
         #[cfg(feature = "onnx")]
         "onnx" => {
+            let provider = args
+                .provider
+                .clone()
+                .or_else(|| cfg.embed.provider.clone())
+                .unwrap_or_else(|| "auto".into());
             // Explicit model_dir wins; otherwise the default model is
             // downloaded into the user cache on first use (fetch.rs).
             let dir = match args
@@ -189,9 +231,9 @@ fn make_backend(args: &EmbedArgs, cfg: &Config, model: &str) -> Result<Box<dyn e
                 .or_else(|| cfg.embed.model_dir.clone())
             {
                 Some(d) => d,
-                None => fetch::ensure_default_model(model)?,
+                None => fetch::ensure_default_model(model, &provider)?,
             };
-            Ok(Box::new(embed::onnx::Onnx::load(&dir)?))
+            Ok(Box::new(embed::onnx::Onnx::load(&dir, &provider)?))
         }
         #[cfg(not(feature = "onnx"))]
         "onnx" => bail!("this build has no onnx backend (rebuild with --features onnx)"),
@@ -222,12 +264,42 @@ fn refresh(conn: &rusqlite::Connection, cfg: &Config, args: &EmbedArgs) -> Resul
         .context("no roots configured (run `semdup init` or set [extract].roots)")?;
     let excludes = cfg.extract.exclude.clone().unwrap_or_default();
     let strip = cfg.extract.strip_comments.unwrap_or(false);
-    let units = extract::extract_roots(&roots, &excludes, strip)?;
+    let units = extract::extract_roots(
+        &roots,
+        &excludes,
+        extract::ExtractOpts {
+            strip_comments: strip,
+            respect_gitignore: cfg.extract.respect_gitignore.unwrap_or(true),
+            granularity: cfg
+                .extract
+                .granularity
+                .clone()
+                .unwrap_or_else(|| extract::ExtractOpts::default().granularity),
+            min_block_lines: cfg
+                .extract
+                .min_block_lines
+                .unwrap_or_else(|| extract::ExtractOpts::default().min_block_lines),
+        },
+    )?;
     eprintln!("indexed {} units", units.len());
     db::replace_corpus(conn, "main", &units)?;
     let model = resolve_model(args.model.clone(), cfg)?;
-    let mut backend = make_backend(args, cfg, &model)?;
-    embed::run(conn, &model, backend.as_mut())?;
+    embed_pending(conn, cfg, args, &model)?;
+    Ok(())
+}
+
+fn embed_pending(
+    conn: &rusqlite::Connection,
+    cfg: &Config,
+    args: &EmbedArgs,
+    model: &str,
+) -> Result<()> {
+    if db::pending_count(conn, model)? == 0 {
+        eprintln!("nothing to embed for {model}");
+        return Ok(());
+    }
+    let mut backend = make_backend(args, cfg, model)?;
+    embed::run(conn, model, backend.as_mut())?;
     Ok(())
 }
 
@@ -252,6 +324,7 @@ fn main() -> Result<()> {
             let args = EmbedArgs {
                 model: None,
                 backend: None,
+                provider: None,
                 model_dir: None,
                 script: None,
             };
@@ -263,7 +336,11 @@ fn main() -> Result<()> {
             root,
             corpus,
             exclude,
+            respect_gitignore,
+            no_respect_gitignore,
             strip_comments,
+            granularity,
+            min_block_lines,
         } => {
             let roots = if root.is_empty() {
                 cfg.extract
@@ -276,23 +353,51 @@ fn main() -> Result<()> {
             let mut excludes = cfg.extract.exclude.clone().unwrap_or_default();
             excludes.extend(exclude);
             let strip = strip_comments || cfg.extract.strip_comments.unwrap_or(false);
-            let units = extract::extract_roots(&roots, &excludes, strip)?;
+            let respect_gitignore = if respect_gitignore {
+                true
+            } else if no_respect_gitignore {
+                false
+            } else {
+                cfg.extract.respect_gitignore.unwrap_or(true)
+            };
+            let units = extract::extract_roots(
+                &roots,
+                &excludes,
+                extract::ExtractOpts {
+                    strip_comments: strip,
+                    respect_gitignore,
+                    granularity: if granularity.is_empty() {
+                        cfg.extract
+                            .granularity
+                            .clone()
+                            .unwrap_or_else(|| extract::ExtractOpts::default().granularity)
+                    } else {
+                        granularity
+                    },
+                    min_block_lines: min_block_lines
+                        .or(cfg.extract.min_block_lines)
+                        .unwrap_or_else(|| extract::ExtractOpts::default().min_block_lines),
+                },
+            )?;
             let n = units.len();
             db::replace_corpus(&conn, &corpus, &units)?;
             eprintln!("extracted {n} units into corpus '{corpus}'");
         }
         Cmd::Embed { embed: args } => {
             let model = resolve_model(args.model.clone(), &cfg)?;
-            let mut backend = make_backend(&args, &cfg, &model)?;
-            embed::run(&conn, &model, backend.as_mut())?;
+            embed_pending(&conn, &cfg, &args, &model)?;
         }
         Cmd::Scan {
             no_refresh,
             embed: args,
             threshold,
+            index,
             min_lines,
             skip_tests,
+            unit_kind,
             json,
+            show_bodies,
+            color,
             top,
             min_cluster,
         } => {
@@ -307,9 +412,18 @@ fn main() -> Result<()> {
                 .context("no threshold given (--threshold, or run `semdup init`)")?;
             let opts = scan::ScanOpts {
                 threshold,
+                index: scan::CandidateIndex::parse(
+                    index
+                        .or(cfg.scan.index)
+                        .unwrap_or_else(|| "exact".into())
+                        .as_str(),
+                )?,
                 min_lines: min_lines.or(cfg.scan.min_lines).unwrap_or(5),
                 skip_tests: skip_tests || cfg.scan.skip_tests.unwrap_or(false),
+                unit_kind: unit_kind.or(cfg.scan.unit_kind),
                 json: json.as_deref(),
+                show_bodies,
+                color,
                 top,
                 min_cluster: min_cluster.or(cfg.scan.min_cluster).unwrap_or(2),
             };
@@ -342,18 +456,23 @@ fn main() -> Result<()> {
         }
         Cmd::InjectEval {
             model,
+            label,
             manifest,
             min_lines,
+            unit_kind,
             min_recall5,
+            summary_row,
         } => {
             let model = resolve_model(model, &cfg)?;
-            inject::run(
-                &conn,
-                &model,
-                &manifest,
-                min_lines.or(cfg.scan.min_lines).unwrap_or(5),
+            let opts = inject::InjectEvalOpts {
+                manifest_path: &manifest,
+                min_lines: min_lines.or(cfg.scan.min_lines).unwrap_or(5),
+                unit_kind,
                 min_recall5,
-            )?;
+                summary_row,
+                label: label.as_deref(),
+            };
+            inject::run(&conn, &model, &opts)?;
         }
         Cmd::Status => db::print_status(&conn)?,
     }

@@ -60,8 +60,8 @@ jobs:
         run: eval/fetch-corpus.sh
       - name: Extract + embed drift (CPU)
         run: |
-          target/release/semdup extract --root eval/corpus --corpus main
-          target/release/semdup extract --root eval/injected --corpus injected
+          target/release/semdup extract --root eval/corpus --corpus main --granularity function
+          target/release/semdup extract --root eval/injected --corpus injected --granularity function
           target/release/semdup embed
       - name: Planted-clone recall gate
         run: |
