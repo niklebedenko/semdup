@@ -14,15 +14,18 @@ before it is ever loaded.
 
 - Cache location: `$SEMDUP_CACHE`, else `$XDG_CACHE_HOME/semdup`, else
   `~/.cache/semdup` (on Windows `%LOCALAPPDATA%\semdup`).
-- Two hosted variants, both from release tag `model-coderankembed-1`:
+- Three hosted variants, all from release tag `model-coderankembed-1`:
 
 | variant | size | picked when |
 |---|---|---|
 | fp32 | ~548 MB | CPU (default) |
 | fp16 | ~274 MB | built with `--features cuda` and the CUDA EP is usable |
+| int8-dynamic | ~200 MB | explicit `--model nomic-ai/CodeRankEmbed@cpu-int8-dynamic --provider cpu` |
 
 fp16 halves the download and is faster on GPU, but is *slower* than fp32 on
-the CPU execution provider, so CPU always gets fp32.
+the CPU execution provider, so the default CPU path stays fp32. The int8
+artifact is hosted for reproducible quantization experiments; re-sweep quality
+and thresholds before using it as a gate.
 
 Nothing is downloaded when an explicit `model_dir` is configured.
 
@@ -72,9 +75,8 @@ python3 scripts/quantize_onnx.py \
   --out models/coderankembed-int8-dynamic
 
 semdup embed \
-  --model nomic-ai/CodeRankEmbed@int8-dynamic \
-  --provider cpu \
-  --model-dir models/coderankembed-int8-dynamic
+  --model nomic-ai/CodeRankEmbed@cpu-int8-dynamic \
+  --provider cpu
 ```
 
 Use `eval/model-row.sh --model fast-cpu` or
@@ -86,9 +88,10 @@ tooling is int8-oriented.
 
 1. Re-export both variants with `scripts/export_onnx.py` (`--fp16` for the
    second) and compute blake3 hashes of `model.onnx` / `tokenizer.json`.
+   For int8, quantize the fp32 export with `scripts/quantize_onnx.py`.
 2. Create a new release tag (`model-coderankembed-2`, ...) with the three
-   assets: `coderankembed-fp32.onnx`, `coderankembed-fp16.onnx`,
-   `coderankembed-tokenizer.json`.
+   model assets: `coderankembed-fp32.onnx`, `coderankembed-fp16.onnx`,
+   `coderankembed-int8-dynamic.onnx`, plus `coderankembed-tokenizer.json`.
 3. Update `RELEASE_BASE`, the pins, and the sizes in `src/fetch.rs`; bump the
    `hosted-model-*` cache keys in `.github/workflows/*.yml`.
 

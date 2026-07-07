@@ -7,10 +7,11 @@
 //! blake3-verified against the pins below before it is moved into place, so
 //! a corrupted or tampered download can never be loaded.
 //!
-//! Two variants exist because fp16 halves the download and is faster on GPU,
-//! but is slower than fp32 on the CPU execution provider: `fp32` (CPU
-//! default) and `fp16` (picked when the CUDA EP is usable, or when
-//! `--provider cuda` is explicit).
+//! Hosted variants exist because fp16 halves the download and is faster on
+//! GPU, while dynamic int8 is useful for explicit CPU quantization experiments.
+//! The default model picks `fp32` on CPU and `fp16` when CUDA is usable;
+//! the explicit `nomic-ai/CodeRankEmbed@cpu-int8-dynamic` key picks the
+//! dynamic-int8 CPU artifact.
 //! `scripts/export_onnx.py` remains the bring-your-own-model path; anything
 //! with an explicit `model_dir` never touches the network.
 
@@ -19,7 +20,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail, ensure};
 
-use crate::config::DEFAULT_MODEL;
+use crate::config::{CPU_INT8_MODEL, DEFAULT_MODEL};
 
 const RELEASE_BASE: &str =
     "https://github.com/niklebedenko/semdup/releases/download/model-coderankembed-1";
@@ -78,6 +79,25 @@ const FP16: Variant = Variant {
     meta_json: r#"{"model":"nomic-ai/CodeRankEmbed","max_seq":2048,"dim":768,"pooling":"cls","fp16":true}"#,
 };
 
+const INT8_DYNAMIC: Variant = Variant {
+    name: "int8-dynamic",
+    assets: [
+        Asset {
+            file: "model.onnx",
+            url_name: "coderankembed-int8-dynamic.onnx",
+            blake3: "e88c1d595447da439b91e878840f29d2c0f21a66d05da07ca7faa611adad07a7",
+            bytes: 209_247_774,
+        },
+        Asset {
+            file: "tokenizer.json",
+            url_name: "coderankembed-tokenizer.json",
+            blake3: "9323872b7f8abfe19f9bf09eb789d33378be39c951627bdde0aad0e9baeb839d",
+            bytes: 711_649,
+        },
+    ],
+    meta_json: r#"{"model":"nomic-ai/CodeRankEmbed","max_seq":2048,"dim":768,"pooling":"cls","fp16":false}"#,
+};
+
 /// Pick fp16 only when the CUDA EP reports usable; on the CPU EP fp16 is
 /// slower than fp32, so CPU always gets fp32.
 fn default_variant(provider: &str) -> Result<&'static Variant> {
@@ -105,6 +125,24 @@ fn default_variant(provider: &str) -> Result<&'static Variant> {
     Ok(&FP32)
 }
 
+fn model_variant(model: &str, provider: &str) -> Result<&'static Variant> {
+    match model {
+        DEFAULT_MODEL => default_variant(provider),
+        CPU_INT8_MODEL => {
+            ensure!(
+                provider == "cpu",
+                "{CPU_INT8_MODEL} is a CPU int8 artifact; pass --provider cpu"
+            );
+            Ok(&INT8_DYNAMIC)
+        }
+        other => bail!(
+            "no model_dir configured for {other}; hosted models are {DEFAULT_MODEL} \
+             and {CPU_INT8_MODEL}; export custom models with scripts/export_onnx.py \
+             and set [embed].model_dir"
+        ),
+    }
+}
+
 fn cache_dir() -> Result<PathBuf> {
     if let Ok(d) = std::env::var("SEMDUP_CACHE") {
         return Ok(PathBuf::from(d));
@@ -130,12 +168,7 @@ fn cache_dir() -> Result<PathBuf> {
 /// Directory for the default model, downloading it on first use. Returns an
 /// existing, verified-at-download-time directory unchanged.
 pub fn ensure_default_model(model: &str, provider: &str) -> Result<PathBuf> {
-    ensure!(
-        model == DEFAULT_MODEL,
-        "no model_dir configured and {model} is not the default model ({DEFAULT_MODEL}); \
-         export it with scripts/export_onnx.py and set [embed].model_dir"
-    );
-    let variant = default_variant(provider)?;
+    let variant = model_variant(model, provider)?;
     let dir = cache_dir()?
         .join("models")
         .join(format!("coderankembed-{}", variant.name));
@@ -145,7 +178,7 @@ pub fn ensure_default_model(model: &str, provider: &str) -> Result<PathBuf> {
     }
     std::fs::create_dir_all(&dir)?;
     eprintln!(
-        "downloading {DEFAULT_MODEL} ({}, {} MB) to {} — one-time setup",
+        "downloading {model} ({}, {} MB) to {} — one-time setup",
         variant.name,
         variant.assets.iter().map(|a| a.bytes).sum::<u64>() / (1024 * 1024),
         dir.display()
@@ -242,6 +275,19 @@ mod tests {
     fn non_default_model_is_rejected() {
         let err = ensure_default_model("someone/other-model", "auto").unwrap_err();
         assert!(err.to_string().contains("model_dir"));
+    }
+
+    #[test]
+    fn explicit_cpu_int8_model_selects_int8_variant() {
+        assert_eq!(
+            model_variant(CPU_INT8_MODEL, "cpu").unwrap().name,
+            "int8-dynamic"
+        );
+        let err = match model_variant(CPU_INT8_MODEL, "auto") {
+            Ok(_) => panic!("auto provider unexpectedly accepted"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("--provider cpu"));
     }
 
     #[test]

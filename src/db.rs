@@ -52,7 +52,12 @@ pub fn open(path: &Path) -> Result<Connection> {
 }
 
 fn configure_connection(conn: &Connection) -> Result<()> {
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    let mode: String =
+        conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
+    ensure!(
+        mode.eq_ignore_ascii_case("wal"),
+        "SQLite refused WAL journal mode, got {mode}"
+    );
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
     conn.pragma_update(None, "cache_size", SQLITE_CACHE_KIB)?;

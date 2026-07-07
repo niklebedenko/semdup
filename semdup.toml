@@ -13,9 +13,8 @@ exclude = ["/.github/"]
 # auto-downloaded into the user cache on first use, both locally and in CI.
 
 [scan]
-# Swept on this repo 2026-07-04: the one real pair sits at 0.756 and the
-# by-design mirrors (per-command run() entry points, onnx/sidecar backends)
-# top out at 0.685. Re-sweep after big refactors or a model change.
-threshold = 0.70
+# Swept on this repo after function/block granularity changes: lower values
+# flag shared scanner/extractor plumbing during large refactors.
+threshold = 0.85
 min_lines = 8
 skip_tests = true

@@ -71,8 +71,8 @@ def load_embeddings(args: argparse.Namespace) -> tuple[list[Unit], np.ndarray]:
         units.append(Unit(path=path, kind=kind, start_line=start, end_line=end))
         vectors.append(vec)
     keep = drop_larger_overlapping_blocks(units)
-    units = [unit for unit, keep_unit in zip(units, keep) if keep_unit]
-    vectors = [vec for vec, keep_unit in zip(vectors, keep) if keep_unit]
+    units = [unit for unit, keep_unit in zip(units, keep, strict=True) if keep_unit]
+    vectors = [vec for vec, keep_unit in zip(vectors, keep, strict=True) if keep_unit]
     return units, np.stack(vectors)
 
 

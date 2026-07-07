@@ -81,6 +81,12 @@ pub fn run(
         .into_iter()
         .filter(|(c, _)| c.kind == UnitKind::Function && rankable(c, opts.skip_tests))
         .collect();
+    if corpus.is_empty() {
+        bail!(
+            "no rankable function units in corpus for model {model}; \
+             re-run `semdup extract` with function granularity and `semdup embed`"
+        );
+    }
 
     let touched = touched_units(opts)?;
     if touched.is_empty() {

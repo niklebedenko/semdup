@@ -140,6 +140,9 @@ pub struct InjectEvalOpts<'a> {
 pub fn run(conn: &Connection, model: &str, opts: &InjectEvalOpts<'_>) -> Result<()> {
     let manifest: Vec<PlantEntry> =
         serde_json::from_str(&std::fs::read_to_string(opts.manifest_path)?)?;
+    if manifest.is_empty() {
+        bail!("manifest {} has no entries", opts.manifest_path.display());
+    }
     let main: Vec<(UnitRow, Vec<f32>)> = db::load_units(conn, "main", model)?
         .into_iter()
         .filter(|(u, _)| u.kind == opts.unit_kind && u.lines() >= opts.min_lines)

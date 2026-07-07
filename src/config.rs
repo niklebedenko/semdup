@@ -14,6 +14,10 @@ use crate::extract::UnitKind;
 /// fetch so slim (non-onnx) builds still resolve the same default name.
 pub const DEFAULT_MODEL: &str = "nomic-ai/CodeRankEmbed";
 
+/// Hosted dynamic-int8 CPU export of the default model. This gets an explicit
+/// cache key so its embeddings do not collide with the default fp32/fp16 keys.
+pub const CPU_INT8_MODEL: &str = "nomic-ai/CodeRankEmbed@cpu-int8-dynamic";
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
