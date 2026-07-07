@@ -13,8 +13,8 @@ exclude = ["/.github/"]
 # auto-downloaded into the user cache on first use, both locally and in CI.
 
 [scan]
-# Swept on this repo after function/block granularity changes: lower values
-# flag shared scanner/extractor plumbing during large refactors.
+# Swept on this repo after function/block granularity changes: 0.85 keeps the
+# dogfood gate focused on close clones instead of shared scanner/extractor plumbing.
 threshold = 0.85
 min_lines = 8
 skip_tests = true
