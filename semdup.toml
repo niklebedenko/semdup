@@ -4,6 +4,7 @@
 
 [extract]
 roots = ["src", "scripts", "sidecar"]
+granularity = ["function"]
 # The CI smoke plant is a deliberate clone of c_function_name; keep it out
 # of the diff gate (the smoke test copies it into src/ to be found).
 exclude = ["/.github/"]
