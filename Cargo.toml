@@ -23,8 +23,12 @@ cuda = ["onnx", "ort/cuda"]
 
 [dependencies]
 anyhow = "1"
+bat = { version = "0.26", default-features = false, features = ["regex-fancy"] }
 blake3 = "1"
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
 clap = { version = "4", features = ["derive"] }
+ignore = "0.4"
+matrixmultiply = "0.3"
 rayon = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

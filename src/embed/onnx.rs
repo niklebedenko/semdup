@@ -6,12 +6,13 @@
 //!   tokenizer.json     — HF fast tokenizer
 //!   semdup-model.json  — { "max_seq": .., "dim": .. }
 //!
-//! Uses the CUDA execution provider when the crate is built with `--features
-//! cuda` and a GPU is present; otherwise falls back to CPU.
+//! Uses the requested ONNX Runtime execution provider (`auto`, `cpu`, or
+//! `cuda`). `auto` picks CUDA when the crate is built with `--features cuda`
+//! and the CUDA EP is usable; otherwise it falls back to CPU.
 
 use std::path::Path;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use ort::session::Session;
 use ort::value::Tensor;
 use serde::Deserialize;
@@ -33,8 +34,27 @@ pub struct Onnx {
     max_batch_tokens: usize,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Provider {
+    Auto,
+    Cpu,
+    Cuda,
+}
+
+impl Provider {
+    fn parse(s: &str) -> Result<Self> {
+        match s {
+            "auto" => Ok(Provider::Auto),
+            "cpu" => Ok(Provider::Cpu),
+            "cuda" => Ok(Provider::Cuda),
+            other => bail!("unknown ONNX provider '{other}' (expected auto, cpu, or cuda)"),
+        }
+    }
+}
+
 impl Onnx {
-    pub fn load(model_dir: &Path) -> Result<Onnx> {
+    pub fn load(model_dir: &Path, provider: &str) -> Result<Onnx> {
+        let provider = Provider::parse(provider)?;
         let meta: ModelMeta = serde_json::from_str(
             &std::fs::read_to_string(model_dir.join("semdup-model.json"))
                 .with_context(|| format!("reading {}/semdup-model.json", model_dir.display()))?,
@@ -43,41 +63,58 @@ impl Onnx {
         #[cfg(feature = "cuda")]
         {
             use ort::execution_providers::{CUDAExecutionProvider, ExecutionProvider};
-            let cuda = CUDAExecutionProvider::default();
-            if cuda.is_available()? {
-                // A `cargo install`ed binary lacks the provider libraries
-                // onnxruntime dlopens from the executable's directory; link
-                // them in from ort's download cache before they're needed.
-                match super::provider_libs::ensure_next_to_exe() {
-                    Ok(Some(note)) => eprintln!("onnx backend: {note}"),
-                    Ok(None) => {}
-                    Err(e) => eprintln!("onnx backend: {e:#}"),
-                }
-                // error_on_failure: without it ort quietly falls back to CPU
-                // when the EP dylib can't load (e.g. cuDNN 9 missing), which
-                // looks identical to GPU mode but runs ~15x slower.
-                match builder.with_execution_providers([cuda.build().error_on_failure()]) {
-                    Ok(b) => {
-                        eprintln!("onnx backend: CUDA execution provider");
-                        builder = b;
+            match provider {
+                Provider::Cpu => eprintln!("onnx backend: CPU"),
+                Provider::Auto | Provider::Cuda => {
+                    let cuda = CUDAExecutionProvider::default();
+                    if cuda.is_available()? {
+                        // A `cargo install`ed binary lacks the provider libraries
+                        // onnxruntime dlopens from the executable's directory; link
+                        // them in from ort's download cache before they're needed.
+                        match super::provider_libs::ensure_next_to_exe() {
+                            Ok(Some(note)) => eprintln!("onnx backend: {note}"),
+                            Ok(None) => {}
+                            Err(e) => eprintln!("onnx backend: {e:#}"),
+                        }
+                        // error_on_failure: without it ort quietly falls back to CPU
+                        // when the EP dylib can't load (e.g. cuDNN 9 missing), which
+                        // looks identical to GPU mode but runs ~15x slower.
+                        match builder.with_execution_providers([cuda.build().error_on_failure()]) {
+                            Ok(b) => {
+                                eprintln!("onnx backend: CUDA execution provider");
+                                builder = b;
+                            }
+                            Err(e) if provider == Provider::Cuda => {
+                                bail!("CUDA EP failed to load: {e}");
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "onnx backend: CUDA EP failed to load, using CPU.\n  {e}\n  \
+                                     hint: the CUDA EP needs cuDNN 9 on the library path; if you \
+                                     have torch installed, try\n  export LD_LIBRARY_PATH=$(python3 \
+                                     -c 'import nvidia.cudnn,os;print(os.path.dirname(\
+                                     nvidia.cudnn.__file__)+\"/lib\")')"
+                                );
+                                builder = Session::builder()?;
+                            }
+                        }
+                    } else if provider == Provider::Cuda {
+                        bail!("CUDA execution provider is not available");
+                    } else {
+                        eprintln!("onnx backend: CUDA not available, using CPU");
                     }
-                    Err(e) => {
-                        eprintln!(
-                            "onnx backend: CUDA EP failed to load, using CPU.\n  {e}\n  \
-                             hint: the CUDA EP needs cuDNN 9 on the library path; if you \
-                             have torch installed, try\n  export LD_LIBRARY_PATH=$(python3 \
-                             -c 'import nvidia.cudnn,os;print(os.path.dirname(\
-                             nvidia.cudnn.__file__)+\"/lib\")')"
-                        );
-                        builder = Session::builder()?;
-                    }
                 }
-            } else {
-                eprintln!("onnx backend: CUDA not available, using CPU");
             }
         }
         #[cfg(not(feature = "cuda"))]
-        eprintln!("onnx backend: CPU (build with --features cuda for GPU)");
+        match provider {
+            Provider::Cuda => {
+                bail!("this build has no CUDA provider (rebuild with --features cuda)")
+            }
+            Provider::Auto | Provider::Cpu => {
+                eprintln!("onnx backend: CPU (build with --features cuda for GPU)");
+            }
+        }
         let session = builder
             .commit_from_file(model_dir.join("model.onnx"))
             .with_context(|| format!("loading {}/model.onnx", model_dir.display()))?;

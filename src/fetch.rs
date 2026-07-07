@@ -8,8 +8,9 @@
 //! a corrupted or tampered download can never be loaded.
 //!
 //! Two variants exist because fp16 halves the download and is faster on GPU,
-//! but is slower than fp32 on the CPU execution provider (~1.3x measured):
-//! `fp32` (CPU default) and `fp16` (picked when the CUDA EP is usable).
+//! but is slower than fp32 on the CPU execution provider: `fp32` (CPU
+//! default) and `fp16` (picked when the CUDA EP is usable, or when
+//! `--provider cuda` is explicit).
 //! `scripts/export_onnx.py` remains the bring-your-own-model path; anything
 //! with an explicit `model_dir` never touches the network.
 
@@ -79,7 +80,18 @@ const FP16: Variant = Variant {
 
 /// Pick fp16 only when the CUDA EP reports usable; on the CPU EP fp16 is
 /// slower than fp32, so CPU always gets fp32.
-fn default_variant() -> &'static Variant {
+fn default_variant(provider: &str) -> Result<&'static Variant> {
+    match provider {
+        "cpu" => return Ok(&FP32),
+        "cuda" => {
+            #[cfg(feature = "cuda")]
+            return Ok(&FP16);
+            #[cfg(not(feature = "cuda"))]
+            bail!("this build has no CUDA provider (rebuild with --features cuda)");
+        }
+        "auto" => {}
+        other => bail!("unknown ONNX provider '{other}' (expected auto, cpu, or cuda)"),
+    }
     #[cfg(feature = "cuda")]
     {
         use ort::execution_providers::{CUDAExecutionProvider, ExecutionProvider};
@@ -87,10 +99,10 @@ fn default_variant() -> &'static Variant {
             .is_available()
             .unwrap_or(false)
         {
-            return &FP16;
+            return Ok(&FP16);
         }
     }
-    &FP32
+    Ok(&FP32)
 }
 
 fn cache_dir() -> Result<PathBuf> {
@@ -117,13 +129,13 @@ fn cache_dir() -> Result<PathBuf> {
 
 /// Directory for the default model, downloading it on first use. Returns an
 /// existing, verified-at-download-time directory unchanged.
-pub fn ensure_default_model(model: &str) -> Result<PathBuf> {
+pub fn ensure_default_model(model: &str, provider: &str) -> Result<PathBuf> {
     ensure!(
         model == DEFAULT_MODEL,
         "no model_dir configured and {model} is not the default model ({DEFAULT_MODEL}); \
          export it with scripts/export_onnx.py and set [embed].model_dir"
     );
-    let variant = default_variant();
+    let variant = default_variant(provider)?;
     let dir = cache_dir()?
         .join("models")
         .join(format!("coderankembed-{}", variant.name));
@@ -228,7 +240,17 @@ mod tests {
 
     #[test]
     fn non_default_model_is_rejected() {
-        let err = ensure_default_model("someone/other-model").unwrap_err();
+        let err = ensure_default_model("someone/other-model", "auto").unwrap_err();
         assert!(err.to_string().contains("model_dir"));
+    }
+
+    #[test]
+    fn provider_selects_default_variant() {
+        assert_eq!(default_variant("cpu").unwrap().name, "fp32");
+        #[cfg(feature = "cuda")]
+        assert_eq!(default_variant("cuda").unwrap().name, "fp16");
+        #[cfg(not(feature = "cuda"))]
+        assert!(default_variant("cuda").is_err());
+        assert!(default_variant("tpu").is_err());
     }
 }

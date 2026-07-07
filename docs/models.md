@@ -40,6 +40,7 @@ Then point semdup at the export in `semdup.toml`:
 ```toml
 [embed]
 model = "<hf-model-id>"       # cache key for vectors
+provider = "auto"             # auto | cpu | cuda
 model_dir = "models/mymodel"  # model.onnx + tokenizer.json + semdup-model.json
 ```
 
@@ -50,6 +51,36 @@ re-sweep after a change (`semdup scan --threshold <t>` at a few values).
 For arbitrary backends (API-based embedders, models without an ONNX path),
 use the python sidecar instead: `backend = "sidecar"` plus a script
 implementing the JSONL protocol in `sidecar/embedder.py`.
+
+## Quantized variants
+
+The ONNX backend separates the execution provider from the artifact. Current
+fast paths use different artifacts but the same backend:
+
+| target | alias | provider | artifact |
+| --- | --- | --- | --- |
+| CPU | `fast-cpu` | `cpu` | dynamic-int8 ONNX |
+| NVIDIA GPU | `fast-gpu` | `cuda` | fp16 ONNX |
+
+CPU quantization experiments use explicit model keys so cached embeddings do
+not collide with the default fp32/fp16 keys:
+
+```sh
+python3 scripts/quantize_onnx.py \
+  --mode int8-dynamic \
+  --input models/coderankembed-fp32 \
+  --out models/coderankembed-int8-dynamic
+
+semdup embed \
+  --model nomic-ai/CodeRankEmbed@int8-dynamic \
+  --provider cpu \
+  --model-dir models/coderankembed-int8-dynamic
+```
+
+Use `eval/model-row.sh --model fast-cpu` or
+`eval/model-row.sh --model fast-gpu` to publish eval rows for the fast-path
+variants. FP8 is not a default CPU path here; ONNX Runtime's CPU quantization
+tooling is int8-oriented.
 
 ## Updating the hosted export
 

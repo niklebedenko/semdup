@@ -100,13 +100,17 @@ fn render_config(roots: &[String], threshold: f32, min_lines: usize, skip_tests:
          \n\
          [extract]\n\
          roots = [{roots_toml}]\n\
+         respect_gitignore = true\n\
+         # granularity = [\"function\"] # uncomment for function-only indexing\n\
+         # min_block_lines = 8\n\
          \n\
          [scan]\n\
          # Cosine similarity cutoff. Per repo and per model: dial it in by\n\
          # running `semdup scan --threshold <t>` at a few values.\n\
          threshold = {threshold}\n\
          min_lines = {min_lines}\n\
-         skip_tests = {skip_tests}\n"
+         skip_tests = {skip_tests}\n\
+         # index = \"exact\" # exact | sparse | auto; sparse is approximate\n"
     )
 }
 
@@ -174,7 +178,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         // Same excludes the extractor will apply, so detected roots never
         // point at directories extraction would skip anyway. Matched on the
         // root-relative path (`./`-anchored): the absolute path would make a
-        // workspace that lives under /build/ or ~/vendor/ exclude everything.
+        // workspace whose parent happens to match an anchored exclude disappear.
         let rel = path.strip_prefix(root).unwrap_or(&path);
         if name.starts_with('.')
             || crate::extract::is_path_excluded(&format!("./{}/", rel.display()), &[])
@@ -290,14 +294,14 @@ mod tests {
     #[test]
     fn fallback_walk_excludes_are_root_relative() {
         // A workspace that itself lives under a directory named like a
-        // default exclude ("build") must not have everything excluded;
-        // its own target/ still must be.
+        // previously common artifact directory must not have everything
+        // excluded; semdup's own eval corpora inside it still must be.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("build").join("repo");
         std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::create_dir_all(root.join("eval/corpus")).unwrap();
         std::fs::write(root.join("src/a.rs"), "").unwrap();
-        std::fs::write(root.join("target/gen.rs"), "").unwrap();
+        std::fs::write(root.join("eval/corpus/gen.rs"), "").unwrap();
         let mut out = Vec::new();
         walk(&root, &root, &mut out).unwrap();
         assert_eq!(out, vec![root.join("src/a.rs")]);

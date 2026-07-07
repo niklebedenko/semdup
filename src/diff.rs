@@ -26,7 +26,7 @@ use serde::Serialize;
 
 use crate::db::{self, UnitRow};
 use crate::embed::{Backend, strip_doc_comments};
-use crate::extract::{self, Unit};
+use crate::extract::{self, Unit, UnitKind};
 use crate::scan::dot;
 
 /// How far below the threshold still earns a REVIEW tag.
@@ -79,7 +79,7 @@ pub fn run(
     // fails --check on duplication scan itself would never report.
     let corpus: Vec<_> = corpus
         .into_iter()
-        .filter(|(c, _)| rankable(c, opts.skip_tests))
+        .filter(|(c, _)| c.kind == UnitKind::Function && rankable(c, opts.skip_tests))
         .collect();
 
     let touched = touched_units(opts)?;
@@ -112,7 +112,8 @@ pub fn run(
             })
             .collect();
         let embedded = backend.embed(&texts)?;
-        for (&i, v) in missing.iter().zip(embedded) {
+        for (&i, mut v) in missing.iter().zip(embedded) {
+            db::normalize_vec(&mut v);
             vecs[i] = Some(v);
         }
     }
@@ -221,8 +222,8 @@ fn touched_units(opts: &DiffOpts) -> Result<Vec<Unit>> {
 
     let mut units = Vec::new();
     for (file, changed) in ranges {
-        // Anchor at the repo root (git paths are repo-relative) so exclude
-        // patterns like "/vendor/" match the same way they do in extract.
+        // Anchor at the repo root (git paths are repo-relative) so configured
+        // exclude patterns match the same way they do in extract.
         if extract::is_path_excluded(&format!("/{file}"), &opts.exclude) {
             continue;
         }
@@ -314,8 +315,11 @@ diff --git a/src/gone.rs b/src/gone.rs
         let unit = |ignored, is_test| UnitRow {
             path: "src/a.rs".into(),
             name: "f".into(),
+            lang: "rust".into(),
+            kind: UnitKind::Function,
             start_line: 1,
             end_line: 10,
+            hash: "hash".into(),
             ignored,
             is_test,
         };
