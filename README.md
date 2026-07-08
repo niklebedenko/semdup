@@ -155,10 +155,10 @@ model-specific.
 
 ### Choosing a model
 
-The default model is **nomic-ai/CodeRankEmbed**. See `docs/models.md` for the
-hosted ONNX export, cache behavior, and bring-your-own-model setup. Use
-`eval/README.md` to benchmark candidate models before trusting their scan
-thresholds.
+The default embedding model is **nomic-ai/CodeRankEmbed** via the hosted
+`nomic-ai/CodeRankEmbed@fast` ONNX export. See `docs/models.md` for cache
+behavior and bring-your-own-model setup. Use `eval/README.md` to benchmark
+candidate models before trusting their scan thresholds.
 
 ## Benchmarks
 

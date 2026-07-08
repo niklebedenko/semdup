@@ -64,6 +64,7 @@ Current published rows:
 | model | n | L1 R@1 | L1 R@5 | L2 R@1 | L2 R@5 | L3 R@1 | L3 R@5 | macro F1@1 | L3 margin |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | nomic-ai/CodeRankEmbed | 84 | 0.89 | 1.00 | 0.86 | 0.96 | 0.75 | 0.96 | 0.83 | +0.0813 |
+| CodeRankEmbed-nbits-int4-asym-cpu | 84 | 0.96 | 1.00 | 0.89 | 0.93 | 0.79 | 0.96 | 0.88 | +0.0683 |
 
 The per-plant rows from `semdup inject-eval` are the audit trail for misses:
 they show the known original's rank and the incorrect top hit when rank is
@@ -116,29 +117,30 @@ The current fast-path aliases are:
 
 | alias | provider | artifact | local smoke result |
 | --- | --- | --- | --- |
-| `fast-cpu` | `cpu` | dynamic-int8 ONNX | 27.1 s on 101 injected units |
+| `fast-cpu` | `cpu` | MatMulNBits int4 asymmetric ONNX | 0.58 texts/s on 104 injected units |
 | `fast-gpu` | `cuda` | fp16 ONNX | 1.67 s on 101 injected units |
 
-The default hosted model ships fp32 for CPU and fp16 for CUDA. The fp16 graph
-is smaller, but it is not a CPU speed path. For CPU experiments, start with
-dynamic int8 quantization:
+The default hosted model uses cache key `nomic-ai/CodeRankEmbed@fast`; it
+picks MatMulNBits int4 on CPU and fp16 on CUDA. The fp16 graph is smaller,
+but it is not a CPU speed path. For CPU experiments, start with the int4
+quantization used by `fast-cpu`:
 
 ```bash
 python3 scripts/quantize_onnx.py \
-  --mode int8-dynamic \
+  --mode nbits-int4-asym \
   --input models/coderankembed-fp32 \
-  --out models/coderankembed-int8-dynamic
+  --out models/coderankembed-nbits-int4-asym
 
-eval/model-row.sh --model coderankembed-int8-dynamic
+eval/model-row.sh --model coderankembed-nbits-int4-asym-cpu
 ```
 
-The generated int8 model is loadable by the built-in ONNX backend and was
-200 MB locally versus 523 MB for fp32. A small CPU smoke on the 101 injected
-units took 27.1 s for int8 dynamic, 39.4 s for fp32, and 46.4 s for fp16 in
-this container. Treat that as a startup-heavy smoke, not the published eval
-result; the table row above remains the source of truth for quality. On the
-same 101-unit smoke with an RTX 3080 after CUDA warm-up, fp16 CUDA took
-1.67 s and fp32 CUDA took 2.47 s, so `fast-gpu` uses fp16.
+The generated int4 model is loadable by the built-in ONNX backend and was
+about 149 MB locally versus 523 MB for fp32. On the full planted-clone eval it
+improved macro F1@1 from 0.83 to 0.88 versus the fp32 CPU baseline. A small
+CPU smoke on 104 injected units ran at 0.58 texts/s for int4 versus
+0.34 texts/s for fp32; on the same smoke with an RTX 3080, int4 CUDA took
+1.91 s, fp16 CUDA took 1.82 s, and fp32 CUDA took 2.47 s, so `fast-gpu` still
+uses fp16.
 
 FP8 is not currently wired into this repo. ONNX Runtime's documented CPU
 quantization path is int8; the FP8 knobs in the public docs are for

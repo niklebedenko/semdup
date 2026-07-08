@@ -44,15 +44,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/semdup
-          key: hosted-model-coderankembed-1
+          key: hosted-model-coderankembed-fast-1
       # Embeddings are cached by (model, content hash): with a restored DB
       # only functions touched since the last run re-embed.
       - name: Cache embedding DB
         uses: actions/cache@v4
         with:
           path: dogfood.sqlite
-          key: dogfood-db-v1-${{ github.run_id }}
-          restore-keys: dogfood-db-v1-
+          key: dogfood-db-v2-${{ github.run_id }}
+          restore-keys: dogfood-db-v2-
 
       # scan auto-refreshes (extract + embed) from semdup.toml roots, and
       # downloads the model on a cold cache. Advisory: exit code is 0.

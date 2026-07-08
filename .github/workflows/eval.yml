@@ -62,10 +62,10 @@ jobs:
         run: |
           target/release/semdup extract --root eval/corpus --corpus main --granularity function
           target/release/semdup extract --root eval/injected --corpus injected --granularity function
-          target/release/semdup embed
+          target/release/semdup embed --model nomic-ai/CodeRankEmbed
       - name: Planted-clone recall gate
         run: |
           set -o pipefail # tee must not mask a failed gate
-          target/release/semdup inject-eval --manifest eval/manifest.json \
+          target/release/semdup inject-eval --model nomic-ai/CodeRankEmbed --manifest eval/manifest.json \
             --min-recall5 0.9 | tee eval-report.md
           tail -6 eval-report.md >> "$GITHUB_STEP_SUMMARY"

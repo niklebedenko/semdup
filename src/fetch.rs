@@ -8,10 +8,10 @@
 //! a corrupted or tampered download can never be loaded.
 //!
 //! Hosted variants exist because fp16 halves the download and is faster on
-//! GPU, while dynamic int8 is useful for explicit CPU quantization experiments.
-//! The default model picks `fp32` on CPU and `fp16` when CUDA is usable;
-//! the explicit `nomic-ai/CodeRankEmbed@cpu-int8-dynamic` key picks the
-//! dynamic-int8 CPU artifact.
+//! GPU, while MatMulNBits int4 is the fastest usable CPU artifact from the
+//! current quantization sweep. The default hosted model picks int4 on CPU and
+//! fp16 when CUDA is usable; explicit CPU keys are available for reproducible
+//! quantization experiments.
 //! `scripts/export_onnx.py` remains the bring-your-own-model path; anything
 //! with an explicit `model_dir` never touches the network.
 
@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail, ensure};
 
-use crate::config::{CPU_INT8_MODEL, DEFAULT_MODEL};
+use crate::config::{CPU_INT8_MODEL, CPU_NBITS_INT4_MODEL, DEFAULT_HOSTED_MODEL, DEFAULT_MODEL};
 
 const RELEASE_BASE: &str =
     "https://github.com/niklebedenko/semdup/releases/download/model-coderankembed-1";
@@ -34,14 +34,14 @@ struct Asset {
 
 struct Variant {
     name: &'static str,
-    assets: [Asset; 2],
-    /// Written locally; 108 bytes is not worth a download.
+    assets: &'static [Asset],
+    /// Written locally; these small metadata files are not worth a download.
     meta_json: &'static str,
 }
 
 const FP32: Variant = Variant {
     name: "fp32",
-    assets: [
+    assets: &[
         Asset {
             file: "model.onnx",
             url_name: "coderankembed-fp32.onnx",
@@ -58,11 +58,11 @@ const FP32: Variant = Variant {
     meta_json: r#"{"model":"nomic-ai/CodeRankEmbed","max_seq":2048,"dim":768,"pooling":"cls","fp16":false}"#,
 };
 
-// Only reachable when the cuda feature is compiled in (see default_variant).
+// Only reachable when the cuda feature is compiled in (see fast_variant).
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 const FP16: Variant = Variant {
     name: "fp16",
-    assets: [
+    assets: &[
         Asset {
             file: "model.onnx",
             url_name: "coderankembed-fp16.onnx",
@@ -81,7 +81,7 @@ const FP16: Variant = Variant {
 
 const INT8_DYNAMIC: Variant = Variant {
     name: "int8-dynamic",
-    assets: [
+    assets: &[
         Asset {
             file: "model.onnx",
             url_name: "coderankembed-int8-dynamic.onnx",
@@ -98,11 +98,36 @@ const INT8_DYNAMIC: Variant = Variant {
     meta_json: r#"{"model":"nomic-ai/CodeRankEmbed","max_seq":2048,"dim":768,"pooling":"cls","fp16":false}"#,
 };
 
-/// Pick fp16 only when the CUDA EP reports usable; on the CPU EP fp16 is
-/// slower than fp32, so CPU always gets fp32.
-fn default_variant(provider: &str) -> Result<&'static Variant> {
+const NBITS_INT4_ASYM: Variant = Variant {
+    name: "nbits-int4-asym",
+    assets: &[
+        Asset {
+            file: "model.onnx",
+            url_name: "coderankembed-nbits-int4-asym.onnx",
+            blake3: "34447cdd9e5b5f6c5606c611ef4d5872e4391ff9324e1cdee3197db9938a33a3",
+            bytes: 647_294,
+        },
+        Asset {
+            file: "model.onnx.data",
+            url_name: "coderankembed-nbits-int4-asym.onnx.data",
+            blake3: "f2b81387aee7a0db997f4a18948560f635396cb7796e1d4e34be018774da146c",
+            bytes: 155_070_464,
+        },
+        Asset {
+            file: "tokenizer.json",
+            url_name: "coderankembed-tokenizer.json",
+            blake3: "9323872b7f8abfe19f9bf09eb789d33378be39c951627bdde0aad0e9baeb839d",
+            bytes: 711_649,
+        },
+    ],
+    meta_json: r#"{"model":"nomic-ai/CodeRankEmbed","max_seq":2048,"dim":768,"pooling":"cls","fp16":false,"quantization":{"mode":"nbits","bits":4,"block_size":128,"symmetric":false}}"#,
+};
+
+/// Pick fp16 only when the CUDA EP reports usable; otherwise use the provided
+/// CPU artifact.
+fn provider_variant(provider: &str, cpu: &'static Variant) -> Result<&'static Variant> {
     match provider {
-        "cpu" => return Ok(&FP32),
+        "cpu" => return Ok(cpu),
         "cuda" => {
             #[cfg(feature = "cuda")]
             return Ok(&FP16);
@@ -122,12 +147,30 @@ fn default_variant(provider: &str) -> Result<&'static Variant> {
             return Ok(&FP16);
         }
     }
-    Ok(&FP32)
+    Ok(cpu)
+}
+
+fn fast_variant(provider: &str) -> Result<&'static Variant> {
+    provider_variant(provider, &NBITS_INT4_ASYM)
+}
+
+/// Explicit legacy model id keeps the original fp32 CPU behavior, so old
+/// config files can still reproduce the published baseline row.
+fn legacy_variant(provider: &str) -> Result<&'static Variant> {
+    provider_variant(provider, &FP32)
 }
 
 fn model_variant(model: &str, provider: &str) -> Result<&'static Variant> {
     match model {
-        DEFAULT_MODEL => default_variant(provider),
+        DEFAULT_HOSTED_MODEL => fast_variant(provider),
+        DEFAULT_MODEL => legacy_variant(provider),
+        CPU_NBITS_INT4_MODEL => {
+            ensure!(
+                provider == "cpu",
+                "{CPU_NBITS_INT4_MODEL} is a CPU int4 artifact; pass --provider cpu"
+            );
+            Ok(&NBITS_INT4_ASYM)
+        }
         CPU_INT8_MODEL => {
             ensure!(
                 provider == "cpu",
@@ -136,8 +179,9 @@ fn model_variant(model: &str, provider: &str) -> Result<&'static Variant> {
             Ok(&INT8_DYNAMIC)
         }
         other => bail!(
-            "no model_dir configured for {other}; hosted models are {DEFAULT_MODEL} \
-             and {CPU_INT8_MODEL}; export custom models with scripts/export_onnx.py \
+            "no model_dir configured for {other}; hosted models are {DEFAULT_HOSTED_MODEL}, \
+             {DEFAULT_MODEL}, {CPU_NBITS_INT4_MODEL}, and {CPU_INT8_MODEL}; \
+             export custom models with scripts/export_onnx.py \
              and set [embed].model_dir"
         ),
     }
@@ -183,7 +227,7 @@ pub fn ensure_default_model(model: &str, provider: &str) -> Result<PathBuf> {
         variant.assets.iter().map(|a| a.bytes).sum::<u64>() / (1024 * 1024),
         dir.display()
     );
-    for asset in &variant.assets {
+    for asset in variant.assets {
         download_verified(asset, &dir)
             .with_context(|| format!("downloading {}", asset.url_name))?;
     }
@@ -291,12 +335,30 @@ mod tests {
     }
 
     #[test]
-    fn provider_selects_default_variant() {
-        assert_eq!(default_variant("cpu").unwrap().name, "fp32");
+    fn explicit_cpu_nbits_model_selects_int4_variant() {
+        assert_eq!(
+            model_variant(CPU_NBITS_INT4_MODEL, "cpu").unwrap().name,
+            "nbits-int4-asym"
+        );
+        let err = match model_variant(CPU_NBITS_INT4_MODEL, "auto") {
+            Ok(_) => panic!("auto provider unexpectedly accepted"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("--provider cpu"));
+    }
+
+    #[test]
+    fn provider_selects_fast_variant() {
+        assert_eq!(fast_variant("cpu").unwrap().name, "nbits-int4-asym");
         #[cfg(feature = "cuda")]
-        assert_eq!(default_variant("cuda").unwrap().name, "fp16");
+        assert_eq!(fast_variant("cuda").unwrap().name, "fp16");
         #[cfg(not(feature = "cuda"))]
-        assert!(default_variant("cuda").is_err());
-        assert!(default_variant("tpu").is_err());
+        assert!(fast_variant("cuda").is_err());
+        assert!(fast_variant("tpu").is_err());
+    }
+
+    #[test]
+    fn explicit_legacy_model_keeps_fp32_cpu_variant() {
+        assert_eq!(model_variant(DEFAULT_MODEL, "cpu").unwrap().name, "fp32");
     }
 }

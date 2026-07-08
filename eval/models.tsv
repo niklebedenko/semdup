@@ -1,12 +1,14 @@
 # alias	label	model_key	backend	provider	model_dir	script
-fast-cpu	CodeRankEmbed-int8-dynamic-cpu	nomic-ai/CodeRankEmbed@cpu-int8-dynamic	onnx	cpu	models/coderankembed-int8-dynamic	-
+fast-cpu	CodeRankEmbed-nbits-int4-asym-cpu	nomic-ai/CodeRankEmbed@cpu-nbits-int4-asym	onnx	cpu	-	-
 fast-gpu	CodeRankEmbed-fp16-cuda	nomic-ai/CodeRankEmbed@gpu-fp16	onnx	cuda	models/coderankembed	-
 coderankembed-fp32-cpu	CodeRankEmbed-fp32-cpu	nomic-ai/CodeRankEmbed@cpu-fp32	onnx	cpu	models/coderankembed-fp32	-
 coderankembed-fp16-cpu	CodeRankEmbed-fp16-cpu	nomic-ai/CodeRankEmbed@cpu-fp16	onnx	cpu	models/coderankembed	-
+coderankembed-nbits-int4-asym-cpu	CodeRankEmbed-nbits-int4-asym-cpu	nomic-ai/CodeRankEmbed@cpu-nbits-int4-asym	onnx	cpu	models/coderankembed-nbits-int4-asym	-
 coderankembed-int8-dynamic-cpu	CodeRankEmbed-int8-dynamic-cpu	nomic-ai/CodeRankEmbed@cpu-int8-dynamic	onnx	cpu	models/coderankembed-int8-dynamic	-
 coderankembed-fp32-cuda	CodeRankEmbed-fp32-cuda	nomic-ai/CodeRankEmbed@gpu-fp32	onnx	cuda	models/coderankembed-fp32	-
 coderankembed-fp16-cuda	CodeRankEmbed-fp16-cuda	nomic-ai/CodeRankEmbed@gpu-fp16	onnx	cuda	models/coderankembed	-
 coderankembed-int8-dynamic-cuda	CodeRankEmbed-int8-dynamic-cuda	nomic-ai/CodeRankEmbed@gpu-int8-dynamic	onnx	cuda	models/coderankembed-int8-dynamic	-
 coderankembed-fp32	CodeRankEmbed-fp32-auto	nomic-ai/CodeRankEmbed@fp32	onnx	auto	models/coderankembed-fp32	-
 coderankembed-fp16	CodeRankEmbed-fp16-auto	nomic-ai/CodeRankEmbed@fp16	onnx	auto	models/coderankembed	-
+coderankembed-nbits-int4-asym	CodeRankEmbed-nbits-int4-asym-auto	nomic-ai/CodeRankEmbed@nbits-int4-asym	onnx	auto	models/coderankembed-nbits-int4-asym	-
 coderankembed-int8-dynamic	CodeRankEmbed-int8-dynamic-auto	nomic-ai/CodeRankEmbed@int8-dynamic	onnx	auto	models/coderankembed-int8-dynamic	-

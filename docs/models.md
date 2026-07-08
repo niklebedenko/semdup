@@ -14,18 +14,22 @@ before it is ever loaded.
 
 - Cache location: `$SEMDUP_CACHE`, else `$XDG_CACHE_HOME/semdup`, else
   `~/.cache/semdup` (on Windows `%LOCALAPPDATA%\semdup`).
-- Three hosted variants, all from release tag `model-coderankembed-1`:
+- Four hosted variants, all from release tag `model-coderankembed-1`:
 
 | variant | size | picked when |
 |---|---|---|
-| fp32 | ~548 MB | CPU (default) |
-| fp16 | ~274 MB | built with `--features cuda` and the CUDA EP is usable |
+| nbits-int4-asym | ~149 MB | CPU default for omitted `--model` |
+| fp16 | ~274 MB | built with `--features cuda` and the CUDA EP is usable for omitted `--model` |
+| fp32 | ~548 MB | explicit legacy `--model nomic-ai/CodeRankEmbed` on CPU |
 | int8-dynamic | ~200 MB | explicit `--model nomic-ai/CodeRankEmbed@cpu-int8-dynamic --provider cpu` |
 
+The omitted-model hosted default uses cache key
+`nomic-ai/CodeRankEmbed@fast`. That prevents the int4 CPU embeddings from
+reusing older fp32 rows stored under the legacy `nomic-ai/CodeRankEmbed` key.
 fp16 halves the download and is faster on GPU, but is *slower* than fp32 on
-the CPU execution provider, so the default CPU path stays fp32. The int8
-artifact is hosted for reproducible quantization experiments; re-sweep quality
-and thresholds before using it as a gate.
+the CPU execution provider, so the CPU speed path uses ORT MatMulNBits int4
+instead. The int8 artifact remains hosted for reproducible quantization
+experiments; re-sweep quality and thresholds before using it as a gate.
 
 Nothing is downloaded when an explicit `model_dir` is configured.
 
@@ -62,35 +66,41 @@ fast paths use different artifacts but the same backend:
 
 | target | alias | provider | artifact |
 | --- | --- | --- | --- |
-| CPU | `fast-cpu` | `cpu` | dynamic-int8 ONNX |
+| CPU | `fast-cpu` | `cpu` | MatMulNBits int4 asymmetric ONNX |
 | NVIDIA GPU | `fast-gpu` | `cuda` | fp16 ONNX |
 
 CPU quantization experiments use explicit model keys so cached embeddings do
-not collide with the default fp32/fp16 keys:
+not collide with other artifacts:
 
 ```sh
 python3 scripts/quantize_onnx.py \
-  --mode int8-dynamic \
+  --mode nbits-int4-asym \
   --input models/coderankembed-fp32 \
-  --out models/coderankembed-int8-dynamic
+  --out models/coderankembed-nbits-int4-asym
 
 semdup embed \
-  --model nomic-ai/CodeRankEmbed@cpu-int8-dynamic \
+  --model nomic-ai/CodeRankEmbed@cpu-nbits-int4-asym \
   --provider cpu
 ```
 
-Use `eval/model-row.sh --model fast-cpu` or
-`eval/model-row.sh --model fast-gpu` to publish eval rows for the fast-path
-variants. FP8 is not a default CPU path here; ONNX Runtime's CPU quantization
-tooling is int8-oriented.
+`fast-cpu` downloads the hosted int4 artifact; the
+`coderankembed-nbits-int4-asym-*` aliases in `eval/models.tsv` use the local
+directory produced by the command above. Use `eval/model-row.sh --model
+fast-cpu` or `eval/model-row.sh --model fast-gpu` to publish eval rows for
+the fast-path variants. FP8 is not a default CPU path here; ONNX Runtime's CPU
+quantization tooling for this model is int8 or weight-only int4 oriented.
 
 ## Updating the hosted export
 
-1. Re-export both variants with `scripts/export_onnx.py` (`--fp16` for the
-   second) and compute blake3 hashes of `model.onnx` / `tokenizer.json`.
-   For int8, quantize the fp32 export with `scripts/quantize_onnx.py`.
-2. Create a new release tag (`model-coderankembed-2`, ...) with the three
-   model assets: `coderankembed-fp32.onnx`, `coderankembed-fp16.onnx`,
+1. Re-export both floating-point variants with `scripts/export_onnx.py`
+   (`--fp16` for the second). Quantize the fp32 export with
+   `scripts/quantize_onnx.py --mode nbits-int4-asym` and, if still needed for
+   comparisons, `--mode int8-dynamic`.
+   Compute blake3 hashes of every hosted file, including external data files.
+2. Create a new release tag (`model-coderankembed-2`, ...) with the hosted
+   assets: `coderankembed-fp32.onnx`, `coderankembed-fp16.onnx`,
+   `coderankembed-nbits-int4-asym.onnx`,
+   `coderankembed-nbits-int4-asym.onnx.data`,
    `coderankembed-int8-dynamic.onnx`, plus `coderankembed-tokenizer.json`.
 3. Update `RELEASE_BASE`, the pins, and the sizes in `src/fetch.rs`; bump the
    `hosted-model-*` cache keys in `.github/workflows/*.yml`.

@@ -122,7 +122,7 @@ fi
 
 if [[ "$model_dir" != "-" && ! -d "$model_dir" ]]; then
   echo "model dir '$model_dir' does not exist for '$model'" >&2
-  echo "for int8, first run: python3 scripts/quantize_onnx.py --mode int8-dynamic --input models/coderankembed-fp32 --out $model_dir" >&2
+  echo "first create it, e.g. python3 scripts/quantize_onnx.py --mode nbits-int4-asym --input models/coderankembed-fp32 --out $model_dir" >&2
   exit 1
 fi
 
