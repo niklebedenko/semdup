@@ -194,16 +194,46 @@ enum Cmd {
     Status,
 }
 
-fn resolve_model(cli: Option<String>, cfg: &Config) -> Result<String> {
-    Ok(cli
-        .or_else(|| cfg.embed.model.clone())
-        .unwrap_or_else(|| config::DEFAULT_MODEL.to_string()))
+struct ModelSelection {
+    /// Key used for embedding cache rows and scan/eval lookups.
+    key: String,
+    /// Model id passed to backends that load by name instead of model_dir.
+    backend_model: String,
+}
+
+fn default_model_key(args: Option<&EmbedArgs>, cfg: &Config) -> &'static str {
+    match args
+        .and_then(|args| args.backend.as_deref())
+        .or(cfg.embed.backend.as_deref())
+    {
+        Some("sidecar") => config::DEFAULT_MODEL,
+        Some("onnx") | None if cfg!(feature = "onnx") => config::DEFAULT_HOSTED_MODEL,
+        Some("onnx") | None => config::DEFAULT_MODEL,
+        Some(_) => config::DEFAULT_HOSTED_MODEL,
+    }
+}
+
+fn resolve_model(cli: Option<String>, cfg: &Config, args: Option<&EmbedArgs>) -> ModelSelection {
+    if let Some(model) = cli.or_else(|| cfg.embed.model.clone()) {
+        return ModelSelection {
+            key: model.clone(),
+            backend_model: model,
+        };
+    }
+    ModelSelection {
+        key: default_model_key(args, cfg).to_string(),
+        backend_model: config::DEFAULT_MODEL.to_string(),
+    }
 }
 
 /// Build the embedding backend from CLI + config. Sidecar needs a script;
 /// onnx needs a model dir or the default model (auto-downloaded); the
 /// default backend is onnx when the feature is compiled in, else sidecar.
-fn make_backend(args: &EmbedArgs, cfg: &Config, model: &str) -> Result<Box<dyn embed::Backend>> {
+fn make_backend(
+    args: &EmbedArgs,
+    cfg: &Config,
+    model: &ModelSelection,
+) -> Result<Box<dyn embed::Backend>> {
     let backend = args
         .backend
         .clone()
@@ -231,7 +261,7 @@ fn make_backend(args: &EmbedArgs, cfg: &Config, model: &str) -> Result<Box<dyn e
                 .or_else(|| cfg.embed.model_dir.clone())
             {
                 Some(d) => d,
-                None => fetch::ensure_default_model(model, &provider)?,
+                None => fetch::ensure_default_model(&model.key, &provider)?,
             };
             Ok(Box::new(embed::onnx::Onnx::load(&dir, &provider)?))
         }
@@ -245,7 +275,7 @@ fn make_backend(args: &EmbedArgs, cfg: &Config, model: &str) -> Result<Box<dyn e
                 .context("sidecar backend needs --script")?;
             Ok(Box::new(embed::sidecar::Sidecar {
                 script,
-                model: model.to_string(),
+                model: model.backend_model.clone(),
                 python: std::env::var("SEMDUP_PYTHON").unwrap_or_else(|_| "python3".into()),
             }))
         }
@@ -283,7 +313,7 @@ fn refresh(conn: &rusqlite::Connection, cfg: &Config, args: &EmbedArgs) -> Resul
     )?;
     eprintln!("indexed {} units", units.len());
     db::replace_corpus(conn, "main", &units)?;
-    let model = resolve_model(args.model.clone(), cfg)?;
+    let model = resolve_model(args.model.clone(), cfg, Some(args));
     embed_pending(conn, cfg, args, &model)?;
     Ok(())
 }
@@ -292,14 +322,14 @@ fn embed_pending(
     conn: &rusqlite::Connection,
     cfg: &Config,
     args: &EmbedArgs,
-    model: &str,
+    model: &ModelSelection,
 ) -> Result<()> {
-    if db::pending_count(conn, model)? == 0 {
-        eprintln!("nothing to embed for {model}");
+    if db::pending_count(conn, &model.key)? == 0 {
+        eprintln!("nothing to embed for {}", model.key);
         return Ok(());
     }
     let mut backend = make_backend(args, cfg, model)?;
-    embed::run(conn, model, backend.as_mut())?;
+    embed::run(conn, &model.key, backend.as_mut())?;
     Ok(())
 }
 
@@ -384,7 +414,7 @@ fn main() -> Result<()> {
             eprintln!("extracted {n} units into corpus '{corpus}'");
         }
         Cmd::Embed { embed: args } => {
-            let model = resolve_model(args.model.clone(), &cfg)?;
+            let model = resolve_model(args.model.clone(), &cfg, Some(&args));
             embed_pending(&conn, &cfg, &args, &model)?;
         }
         Cmd::Scan {
@@ -406,7 +436,7 @@ fn main() -> Result<()> {
             if !no_refresh && cfg.extract.roots.is_some() {
                 refresh(&conn, &cfg, &args)?;
             }
-            let model = resolve_model(args.model.clone(), &cfg)?;
+            let model = resolve_model(args.model.clone(), &cfg, Some(&args));
             let threshold = threshold
                 .or(cfg.scan.threshold)
                 .context("no threshold given (--threshold, or run `semdup init`)")?;
@@ -427,7 +457,7 @@ fn main() -> Result<()> {
                 top,
                 min_cluster: min_cluster.or(cfg.scan.min_cluster).unwrap_or(2),
             };
-            scan::run(&conn, &model, &opts)?;
+            scan::run(&conn, &model.key, &opts)?;
         }
         Cmd::Diff {
             base,
@@ -438,7 +468,7 @@ fn main() -> Result<()> {
             check,
             embed: args,
         } => {
-            let model = resolve_model(args.model.clone(), &cfg)?;
+            let model = resolve_model(args.model.clone(), &cfg, Some(&args));
             let opts = diff::DiffOpts {
                 base,
                 min_lines: min_lines.or(cfg.scan.min_lines).unwrap_or(5),
@@ -449,7 +479,7 @@ fn main() -> Result<()> {
                 exclude: cfg.extract.exclude.clone().unwrap_or_default(),
             };
             let mut mk = || make_backend(&args, &cfg, &model);
-            let findings = diff::run(&conn, &model, &opts, &mut mk)?;
+            let findings = diff::run(&conn, &model.key, &opts, &mut mk)?;
             if check && findings > 0 {
                 std::process::exit(1);
             }
@@ -463,7 +493,7 @@ fn main() -> Result<()> {
             min_recall5,
             summary_row,
         } => {
-            let model = resolve_model(model, &cfg)?;
+            let model = resolve_model(model, &cfg, None);
             let opts = inject::InjectEvalOpts {
                 manifest_path: &manifest,
                 min_lines: min_lines.or(cfg.scan.min_lines).unwrap_or(5),
@@ -472,7 +502,7 @@ fn main() -> Result<()> {
                 summary_row,
                 label: label.as_deref(),
             };
-            inject::run(&conn, &model, &opts)?;
+            inject::run(&conn, &model.key, &opts)?;
         }
         Cmd::Status => db::print_status(&conn)?,
     }

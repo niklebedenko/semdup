@@ -9,8 +9,8 @@ granularity = ["function"]
 # of the diff gate (the smoke test copies it into src/ to be found).
 exclude = ["/.github/"]
 
-# No [embed] section: the default model (nomic-ai/CodeRankEmbed) is
-# auto-downloaded into the user cache on first use, both locally and in CI.
+# No [embed] section: the default hosted model (nomic-ai/CodeRankEmbed@fast)
+# is auto-downloaded into the user cache on first use, both locally and in CI.
 
 [scan]
 # Swept on this repo after function/block granularity changes: 0.85 keeps the

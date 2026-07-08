@@ -9,10 +9,18 @@ use serde::Deserialize;
 
 use crate::extract::UnitKind;
 
-/// The model used when neither CLI nor config names one; the onnx backend
-/// auto-downloads its hosted export (fetch.rs). Lives here rather than in
-/// fetch so slim (non-onnx) builds still resolve the same default name.
+/// Hugging Face model id used by the sidecar backend and legacy explicit
+/// configs. Lives here rather than in fetch so slim (non-onnx) builds still
+/// resolve the same model name.
 pub const DEFAULT_MODEL: &str = "nomic-ai/CodeRankEmbed";
+
+/// Hosted auto-download key used when neither CLI nor config names a model.
+/// It gets its own cache key because the CPU artifact differs from the
+/// legacy fp32 export.
+pub const DEFAULT_HOSTED_MODEL: &str = "nomic-ai/CodeRankEmbed@fast";
+
+/// Hosted MatMulNBits int4 CPU export of the default model.
+pub const CPU_NBITS_INT4_MODEL: &str = "nomic-ai/CodeRankEmbed@cpu-nbits-int4-asym";
 
 /// Hosted dynamic-int8 CPU export of the default model. This gets an explicit
 /// cache key so its embeddings do not collide with the default fp32/fp16 keys.
