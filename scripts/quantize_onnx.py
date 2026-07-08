@@ -54,14 +54,23 @@ def main():
             "weight_type": "QInt8",
         }
     elif args.mode == "nbits-int4-asym":
-        from onnxruntime.quantization.matmul_nbits_quantizer import MatMulNBitsQuantizer
+        from onnxruntime.quantization.matmul_nbits_quantizer import (
+            DefaultWeightOnlyQuantConfig,
+            MatMulNBitsQuantizer,
+        )
 
+        algo_config = DefaultWeightOnlyQuantConfig(
+            block_size=128,
+            is_symmetric=False,
+            op_types_to_quantize=tuple(args.ops),
+            bits=4,
+        )
         quantizer = MatMulNBitsQuantizer(
             str(src / "model.onnx"),
             bits=4,
             block_size=128,
             is_symmetric=False,
-            op_types_to_quantize=tuple(args.ops),
+            algo_config=algo_config,
         )
         quantizer.process()
         quantizer.model.save_model_to_file(
