@@ -123,11 +123,11 @@ const NBITS_INT4_ASYM: Variant = Variant {
     meta_json: r#"{"model":"nomic-ai/CodeRankEmbed","max_seq":2048,"dim":768,"pooling":"cls","fp16":false,"quantization":{"mode":"nbits","bits":4,"block_size":128,"symmetric":false}}"#,
 };
 
-/// Pick fp16 only when the CUDA EP reports usable; otherwise use the fastest
-/// CPU artifact from the current quantization sweep.
-fn fast_variant(provider: &str) -> Result<&'static Variant> {
+/// Pick fp16 only when the CUDA EP reports usable; otherwise use the provided
+/// CPU artifact.
+fn provider_variant(provider: &str, cpu: &'static Variant) -> Result<&'static Variant> {
     match provider {
-        "cpu" => return Ok(&NBITS_INT4_ASYM),
+        "cpu" => return Ok(cpu),
         "cuda" => {
             #[cfg(feature = "cuda")]
             return Ok(&FP16);
@@ -147,34 +147,17 @@ fn fast_variant(provider: &str) -> Result<&'static Variant> {
             return Ok(&FP16);
         }
     }
-    Ok(&NBITS_INT4_ASYM)
+    Ok(cpu)
+}
+
+fn fast_variant(provider: &str) -> Result<&'static Variant> {
+    provider_variant(provider, &NBITS_INT4_ASYM)
 }
 
 /// Explicit legacy model id keeps the original fp32 CPU behavior, so old
 /// config files can still reproduce the published baseline row.
 fn legacy_variant(provider: &str) -> Result<&'static Variant> {
-    match provider {
-        "cpu" => return Ok(&FP32),
-        "cuda" => {
-            #[cfg(feature = "cuda")]
-            return Ok(&FP16);
-            #[cfg(not(feature = "cuda"))]
-            bail!("this build has no CUDA provider (rebuild with --features cuda)");
-        }
-        "auto" => {}
-        other => bail!("unknown ONNX provider '{other}' (expected auto, cpu, or cuda)"),
-    }
-    #[cfg(feature = "cuda")]
-    {
-        use ort::execution_providers::{CUDAExecutionProvider, ExecutionProvider};
-        if CUDAExecutionProvider::default()
-            .is_available()
-            .unwrap_or(false)
-        {
-            return Ok(&FP16);
-        }
-    }
-    Ok(&FP32)
+    provider_variant(provider, &FP32)
 }
 
 fn model_variant(model: &str, provider: &str) -> Result<&'static Variant> {
