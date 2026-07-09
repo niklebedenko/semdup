@@ -11,6 +11,8 @@
 //! and the CUDA EP is usable; otherwise it falls back to CPU.
 
 use std::path::Path;
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail, ensure};
 use ort::session::Session;
@@ -19,6 +21,8 @@ use serde::Deserialize;
 use tokenizers::Tokenizer;
 
 use super::Backend;
+
+static WARNED_VISIBLE_CUDA_GPU_CPU_PATH: AtomicBool = AtomicBool::new(false);
 
 #[derive(Deserialize)]
 struct ModelMeta {
@@ -64,7 +68,10 @@ impl Onnx {
         {
             use ort::execution_providers::{CUDAExecutionProvider, ExecutionProvider};
             match provider {
-                Provider::Cpu => eprintln!("onnx backend: CPU"),
+                Provider::Cpu => {
+                    eprintln!("onnx backend: CPU");
+                    warn_if_visible_cuda_gpu_on_cpu_path();
+                }
                 Provider::Auto | Provider::Cuda => {
                     let cuda = CUDAExecutionProvider::default();
                     if cuda.is_available()? {
@@ -95,6 +102,7 @@ impl Onnx {
                                      -c 'import nvidia.cudnn,os;print(os.path.dirname(\
                                      nvidia.cudnn.__file__)+\"/lib\")')"
                                 );
+                                warn_if_visible_cuda_gpu_on_cpu_path();
                                 builder = Session::builder()?;
                             }
                         }
@@ -102,6 +110,7 @@ impl Onnx {
                         bail!("CUDA execution provider is not available");
                     } else {
                         eprintln!("onnx backend: CUDA not available, using CPU");
+                        warn_if_visible_cuda_gpu_on_cpu_path();
                     }
                 }
             }
@@ -113,6 +122,7 @@ impl Onnx {
             }
             Provider::Auto | Provider::Cpu => {
                 eprintln!("onnx backend: CPU (build with --features cuda for GPU)");
+                warn_if_visible_cuda_gpu_on_cpu_path();
             }
         }
         let session = builder
@@ -176,6 +186,69 @@ impl Onnx {
     }
 }
 
+fn warn_if_visible_cuda_gpu_on_cpu_path() {
+    if visible_cuda_gpu() && !WARNED_VISIBLE_CUDA_GPU_CPU_PATH.swap(true, Ordering::Relaxed) {
+        eprintln!(
+            "warning: CUDA GPU appears to be visible, but semdup is using CPU embeddings. \
+             Install or build semdup with `--features cuda` and use `--provider auto` or \
+             `--provider cuda` to run embeddings on the GPU."
+        );
+    }
+}
+
+fn visible_cuda_gpu() -> bool {
+    if !cuda_visible_devices_allows_gpu(std::env::var("CUDA_VISIBLE_DEVICES").ok().as_deref())
+        || !cuda_visible_devices_allows_gpu(std::env::var("NVIDIA_VISIBLE_DEVICES").ok().as_deref())
+    {
+        return false;
+    }
+
+    if let Ok(output) = Command::new("nvidia-smi").arg("-L").output()
+        && output.status.success()
+        && nvidia_smi_lists_gpu(&output.stdout)
+    {
+        return true;
+    }
+
+    linux_nvidia_device_visible()
+}
+
+fn cuda_visible_devices_allows_gpu(value: Option<&str>) -> bool {
+    let Some(value) = value.map(str::trim) else {
+        return true;
+    };
+    if value.is_empty() || value == "-1" {
+        return false;
+    }
+    !matches!(
+        value.to_ascii_lowercase().as_str(),
+        "none" | "void" | "nodevfiles"
+    )
+}
+
+fn nvidia_smi_lists_gpu(stdout: &[u8]) -> bool {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .any(|line| line.trim_start().starts_with("GPU "))
+}
+
+fn linux_nvidia_device_visible() -> bool {
+    std::fs::read_dir("/dev")
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .any(|name| {
+            name.strip_prefix("nvidia").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit())
+            })
+        })
+        || std::fs::read_dir("/proc/driver/nvidia/gpus")
+            .ok()
+            .is_some_and(|mut entries| entries.next().is_some())
+}
+
 impl Backend for Onnx {
     fn embed(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         // Tokenize (truncated, unpadded) to learn lengths.
@@ -226,5 +299,45 @@ impl Backend for Onnx {
         }
         flush(self, &mut batch, &mut out)?;
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cuda_visible_devices_hiding_values_disable_gpu_warning() {
+        for value in [
+            Some(""),
+            Some("-1"),
+            Some("none"),
+            Some("void"),
+            Some("NoDevFiles"),
+        ] {
+            assert!(!cuda_visible_devices_allows_gpu(value));
+        }
+    }
+
+    #[test]
+    fn cuda_visible_devices_visible_values_allow_gpu_warning() {
+        for value in [
+            None,
+            Some("0"),
+            Some("0,1"),
+            Some("GPU-deadbeef"),
+            Some("all"),
+        ] {
+            assert!(cuda_visible_devices_allows_gpu(value));
+        }
+    }
+
+    #[test]
+    fn nvidia_smi_output_detection_requires_listed_gpu() {
+        assert!(nvidia_smi_lists_gpu(
+            b"GPU 0: NVIDIA RTX 4090 (UUID: GPU-deadbeef)\n"
+        ));
+        assert!(!nvidia_smi_lists_gpu(b"No devices were found\n"));
+        assert!(!nvidia_smi_lists_gpu(b""));
     }
 }
