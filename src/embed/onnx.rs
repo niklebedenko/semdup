@@ -10,9 +10,11 @@
 //! `cuda`). `auto` picks CUDA when the crate is built with `--features cuda`
 //! and the CUDA EP is usable; otherwise it falls back to CPU.
 
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use ort::session::Session;
@@ -23,6 +25,7 @@ use tokenizers::Tokenizer;
 use super::Backend;
 
 static WARNED_VISIBLE_CUDA_GPU_CPU_PATH: AtomicBool = AtomicBool::new(false);
+const NVIDIA_SMI_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Deserialize)]
 struct ModelMeta {
@@ -70,7 +73,9 @@ impl Onnx {
             match provider {
                 Provider::Cpu => {
                     eprintln!("onnx backend: CPU");
-                    warn_if_visible_cuda_gpu_on_cpu_path();
+                    warn_if_visible_cuda_gpu_on_cpu_path(
+                        CpuEmbeddingWarning::ExplicitCpuWithCudaBuild,
+                    );
                 }
                 Provider::Auto | Provider::Cuda => {
                     let cuda = CUDAExecutionProvider::default();
@@ -102,7 +107,9 @@ impl Onnx {
                                      -c 'import nvidia.cudnn,os;print(os.path.dirname(\
                                      nvidia.cudnn.__file__)+\"/lib\")')"
                                 );
-                                warn_if_visible_cuda_gpu_on_cpu_path();
+                                warn_if_visible_cuda_gpu_on_cpu_path(
+                                    CpuEmbeddingWarning::AutoFallbackCudaEpFailed,
+                                );
                                 builder = Session::builder()?;
                             }
                         }
@@ -110,7 +117,9 @@ impl Onnx {
                         bail!("CUDA execution provider is not available");
                     } else {
                         eprintln!("onnx backend: CUDA not available, using CPU");
-                        warn_if_visible_cuda_gpu_on_cpu_path();
+                        warn_if_visible_cuda_gpu_on_cpu_path(
+                            CpuEmbeddingWarning::AutoFallbackCudaUnavailable,
+                        );
                     }
                 }
             }
@@ -120,9 +129,15 @@ impl Onnx {
             Provider::Cuda => {
                 bail!("this build has no CUDA provider (rebuild with --features cuda)")
             }
-            Provider::Auto | Provider::Cpu => {
+            Provider::Auto => {
                 eprintln!("onnx backend: CPU (build with --features cuda for GPU)");
-                warn_if_visible_cuda_gpu_on_cpu_path();
+                warn_if_visible_cuda_gpu_on_cpu_path(CpuEmbeddingWarning::AutoWithoutCudaBuild);
+            }
+            Provider::Cpu => {
+                eprintln!("onnx backend: CPU (build with --features cuda for GPU)");
+                warn_if_visible_cuda_gpu_on_cpu_path(
+                    CpuEmbeddingWarning::ExplicitCpuWithoutCudaBuild,
+                );
             }
         }
         let session = builder
@@ -186,13 +201,64 @@ impl Onnx {
     }
 }
 
-fn warn_if_visible_cuda_gpu_on_cpu_path() {
+#[derive(Clone, Copy)]
+enum CpuEmbeddingWarning {
+    #[cfg(feature = "cuda")]
+    ExplicitCpuWithCudaBuild,
+    #[cfg(feature = "cuda")]
+    AutoFallbackCudaEpFailed,
+    #[cfg(feature = "cuda")]
+    AutoFallbackCudaUnavailable,
+    #[cfg(not(feature = "cuda"))]
+    AutoWithoutCudaBuild,
+    #[cfg(not(feature = "cuda"))]
+    ExplicitCpuWithoutCudaBuild,
+}
+
+impl CpuEmbeddingWarning {
+    fn message(self) -> &'static str {
+        match self {
+            #[cfg(feature = "cuda")]
+            CpuEmbeddingWarning::ExplicitCpuWithCudaBuild => {
+                "warning: CUDA GPU appears to be visible, but `--provider cpu` selected CPU \
+                 embeddings. Use `--provider auto` or `--provider cuda` to run embeddings on \
+                 the GPU."
+            }
+            #[cfg(feature = "cuda")]
+            CpuEmbeddingWarning::AutoFallbackCudaEpFailed => {
+                "warning: CUDA GPU appears to be visible, but the CUDA execution provider failed \
+                 to load, so semdup is using CPU embeddings. Fix the CUDA/cuDNN library path or \
+                 pass `--provider cuda` to make this a hard error."
+            }
+            #[cfg(feature = "cuda")]
+            CpuEmbeddingWarning::AutoFallbackCudaUnavailable => {
+                "warning: CUDA GPU appears to be visible, but ONNX Runtime reports the CUDA \
+                 execution provider is unavailable, so semdup is using CPU embeddings. Check \
+                 the NVIDIA driver and CUDA provider setup."
+            }
+            #[cfg(not(feature = "cuda"))]
+            CpuEmbeddingWarning::AutoWithoutCudaBuild => {
+                "warning: CUDA GPU appears to be visible, but this semdup binary was built \
+                 without CUDA support and is using CPU embeddings. Install or build semdup \
+                 with `--features cuda` to run embeddings on the GPU."
+            }
+            #[cfg(not(feature = "cuda"))]
+            CpuEmbeddingWarning::ExplicitCpuWithoutCudaBuild => {
+                "warning: CUDA GPU appears to be visible, but this semdup binary was built \
+                 without CUDA support and `--provider cpu` selected CPU embeddings. Install or \
+                 build semdup with `--features cuda`, then use `--provider auto` or \
+                 `--provider cuda` to run embeddings on the GPU."
+            }
+        }
+    }
+}
+
+fn warn_if_visible_cuda_gpu_on_cpu_path(reason: CpuEmbeddingWarning) {
+    if WARNED_VISIBLE_CUDA_GPU_CPU_PATH.load(Ordering::Relaxed) {
+        return;
+    }
     if visible_cuda_gpu() && !WARNED_VISIBLE_CUDA_GPU_CPU_PATH.swap(true, Ordering::Relaxed) {
-        eprintln!(
-            "warning: CUDA GPU appears to be visible, but semdup is using CPU embeddings. \
-             Install or build semdup with `--features cuda` and use `--provider auto` or \
-             `--provider cuda` to run embeddings on the GPU."
-        );
+        eprintln!("{}", reason.message());
     }
 }
 
@@ -203,9 +269,8 @@ fn visible_cuda_gpu() -> bool {
         return false;
     }
 
-    if let Ok(output) = Command::new("nvidia-smi").arg("-L").output()
-        && output.status.success()
-        && nvidia_smi_lists_gpu(&output.stdout)
+    if let Some(stdout) = nvidia_smi_stdout_with_timeout(NVIDIA_SMI_TIMEOUT)
+        && nvidia_smi_lists_gpu(&stdout)
     {
         return true;
     }
@@ -230,6 +295,32 @@ fn nvidia_smi_lists_gpu(stdout: &[u8]) -> bool {
     String::from_utf8_lossy(stdout)
         .lines()
         .any(|line| line.trim_start().starts_with("GPU "))
+}
+
+fn nvidia_smi_stdout_with_timeout(timeout: Duration) -> Option<Vec<u8>> {
+    let mut child = Command::new("nvidia-smi")
+        .arg("-L")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().ok()? {
+            if !status.success() {
+                return None;
+            }
+            let mut stdout = Vec::new();
+            child.stdout.take()?.read_to_end(&mut stdout).ok()?;
+            return Some(stdout);
+        }
+        if started.elapsed() >= timeout {
+            child.kill().ok();
+            child.wait().ok();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn linux_nvidia_device_visible() -> bool {
