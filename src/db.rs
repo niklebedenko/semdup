@@ -12,7 +12,7 @@ use crate::extract::{Unit, UnitKind};
 
 pub type UnitEmbedding = (UnitRow, Vec<f32>);
 
-const DB_USER_VERSION: i64 = 2;
+const DB_USER_VERSION: i64 = 3;
 const SQLITE_CACHE_KIB: i64 = -200_000;
 const SQLITE_MMAP_BYTES: i64 = 256 * 1024 * 1024;
 
@@ -29,6 +29,7 @@ pub fn open(path: &Path) -> Result<Connection> {
             unit_kind TEXT NOT NULL DEFAULT 'function',
             start_line INTEGER NOT NULL,
             end_line INTEGER NOT NULL,
+            effective_lines INTEGER NOT NULL,
             hash TEXT NOT NULL,
             ignored INTEGER NOT NULL,
             is_test INTEGER NOT NULL
@@ -74,21 +75,41 @@ fn migrate(conn: &Connection) -> Result<()> {
         if version < 2 {
             add_unit_kind_column(conn)?;
         }
+        if version < 3 {
+            add_effective_lines_column(conn)?;
+        }
         conn.pragma_update(None, "user_version", DB_USER_VERSION)?;
     }
     Ok(())
 }
 
-fn add_unit_kind_column(conn: &Connection) -> Result<()> {
-    let mut stmt = conn.prepare("PRAGMA table_info(units)")?;
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let columns = stmt.query_map([], |r| r.get::<_, String>(1))?;
-    let has_unit_kind = columns
+    Ok(columns
         .collect::<rusqlite::Result<Vec<_>>>()?
         .iter()
-        .any(|c| c == "unit_kind");
-    if !has_unit_kind {
+        .any(|c| c == column))
+}
+
+fn add_unit_kind_column(conn: &Connection) -> Result<()> {
+    if !has_column(conn, "units", "unit_kind")? {
         conn.execute(
             "ALTER TABLE units ADD COLUMN unit_kind TEXT NOT NULL DEFAULT 'function'",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn add_effective_lines_column(conn: &Connection) -> Result<()> {
+    if !has_column(conn, "units", "effective_lines")? {
+        conn.execute(
+            "ALTER TABLE units ADD COLUMN effective_lines INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE units SET effective_lines = end_line - start_line + 1",
             [],
         )?;
     }
@@ -137,8 +158,8 @@ pub fn replace_corpus(conn: &Connection, corpus: &str, units: &[Unit]) -> Result
     let tx = conn.unchecked_transaction()?;
     {
         let mut ins_unit = tx.prepare(
-            "INSERT INTO units (corpus, path, name, lang, unit_kind, start_line, end_line, hash, ignored, is_test)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO units (corpus, path, name, lang, unit_kind, start_line, end_line, effective_lines, hash, ignored, is_test)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )?;
         let mut ins_text =
             tx.prepare("INSERT OR IGNORE INTO texts (hash, text) VALUES (?1, ?2)")?;
@@ -153,6 +174,7 @@ pub fn replace_corpus(conn: &Connection, corpus: &str, units: &[Unit]) -> Result
                 // (platform-dependent width); go through i64 at the boundary.
                 u.start_line as i64,
                 u.end_line as i64,
+                u.effective_lines as i64,
                 u.hash,
                 u.ignored,
                 u.is_test,
@@ -228,6 +250,7 @@ pub struct UnitRow {
     pub kind: UnitKind,
     pub start_line: usize,
     pub end_line: usize,
+    pub effective_lines: usize,
     pub hash: String,
     pub ignored: bool,
     pub is_test: bool,
@@ -246,6 +269,10 @@ impl UnitRow {
     }
 
     pub fn lines(&self) -> usize {
+        self.effective_lines
+    }
+
+    pub fn span_lines(&self) -> usize {
         self.end_line - self.start_line + 1
     }
 }
@@ -254,12 +281,12 @@ impl UnitRow {
 /// Units whose text has no embedding are skipped.
 pub fn load_units(conn: &Connection, corpus: &str, model: &str) -> Result<Vec<UnitEmbedding>> {
     let mut stmt = conn.prepare(
-        "SELECT u.path, u.name, u.lang, u.unit_kind, u.start_line, u.end_line, u.hash, u.ignored, u.is_test, e.vec
+        "SELECT u.path, u.name, u.lang, u.unit_kind, u.start_line, u.end_line, u.effective_lines, u.hash, u.ignored, u.is_test, e.vec
          FROM units u JOIN embeddings e ON e.hash = u.hash AND e.model = ?1
          WHERE u.corpus = ?2",
     )?;
     let rows = stmt.query_map([model, corpus], |r| {
-        let blob: Vec<u8> = r.get(9)?;
+        let blob: Vec<u8> = r.get(10)?;
         Ok((
             UnitRow {
                 path: r.get(0)?,
@@ -268,9 +295,10 @@ pub fn load_units(conn: &Connection, corpus: &str, model: &str) -> Result<Vec<Un
                 kind: parse_unit_kind(r.get::<_, String>(3)?)?,
                 start_line: r.get::<_, i64>(4)? as usize,
                 end_line: r.get::<_, i64>(5)? as usize,
-                hash: r.get(6)?,
-                ignored: r.get(7)?,
-                is_test: r.get(8)?,
+                effective_lines: r.get::<_, i64>(6)? as usize,
+                hash: r.get(7)?,
+                ignored: r.get(8)?,
+                is_test: r.get(9)?,
             },
             blob,
         ))
@@ -302,18 +330,18 @@ pub fn load_scannable_units(
         |r| r.get(0),
     )?;
     let mut stmt = conn.prepare(
-        "SELECT u.path, u.name, u.lang, u.unit_kind, u.start_line, u.end_line, u.hash, u.ignored, u.is_test, e.vec
+        "SELECT u.path, u.name, u.lang, u.unit_kind, u.start_line, u.end_line, u.effective_lines, u.hash, u.ignored, u.is_test, e.vec
          FROM units u JOIN embeddings e ON e.hash = u.hash AND e.model = ?1
          WHERE u.corpus = ?2
            AND u.ignored = 0
-           AND (u.end_line - u.start_line + 1) >= ?3
+           AND u.effective_lines >= ?3
            AND (?4 = 0 OR u.is_test = 0)
            AND (?5 IS NULL OR u.unit_kind = ?5)",
     )?;
     let rows = stmt.query_map(
         rusqlite::params![model, corpus, min_lines as i64, skip_tests, kind],
         |r| {
-            let blob: Vec<u8> = r.get(9)?;
+            let blob: Vec<u8> = r.get(10)?;
             Ok((
                 UnitRow {
                     path: r.get(0)?,
@@ -322,9 +350,10 @@ pub fn load_scannable_units(
                     kind: parse_unit_kind(r.get::<_, String>(3)?)?,
                     start_line: r.get::<_, i64>(4)? as usize,
                     end_line: r.get::<_, i64>(5)? as usize,
-                    hash: r.get(6)?,
-                    ignored: r.get(7)?,
-                    is_test: r.get(8)?,
+                    effective_lines: r.get::<_, i64>(6)? as usize,
+                    hash: r.get(7)?,
+                    ignored: r.get(8)?,
+                    is_test: r.get(9)?,
                 },
                 blob,
             ))
@@ -414,4 +443,59 @@ pub fn print_status(conn: &Connection) -> Result<()> {
         println!("embeds {model} {n}");
     }
     Ok(())
+}
+
+/// Flush WAL contents back into the main DB file and truncate the WAL. This is
+/// useful before external cache snapshots, and harmless for read-only runs.
+pub fn checkpoint(conn: &Connection) -> Result<()> {
+    let _: (i64, i64, i64) = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+    })?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unit(name: &str, hash: &str, effective_lines: usize) -> Unit {
+        Unit {
+            path: format!("src/{name}.rs"),
+            name: name.to_string(),
+            lang: "rust".to_string(),
+            kind: UnitKind::Function,
+            start_line: 1,
+            end_line: 10,
+            effective_lines,
+            hash: hash.to_string(),
+            text: format!("fn {name}() {{}}"),
+            ignored: false,
+            is_test: false,
+        }
+    }
+
+    #[test]
+    fn scannable_units_filter_on_effective_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = open(&tmp.path().join("semdup.sqlite")).unwrap();
+        let units = vec![unit("thin", "thin-hash", 1), unit("real", "real-hash", 2)];
+        replace_corpus(&conn, "main", &units).unwrap();
+        insert_embeddings(
+            &conn,
+            "model",
+            &[
+                ("thin-hash".to_string(), vec![1.0, 0.0]),
+                ("real-hash".to_string(), vec![0.0, 1.0]),
+            ],
+        )
+        .unwrap();
+
+        let (got, n_ignored) =
+            load_scannable_units(&conn, "main", "model", 2, false, Some(UnitKind::Function))
+                .unwrap();
+
+        assert_eq!(n_ignored, 0);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0.name, "real");
+    }
 }

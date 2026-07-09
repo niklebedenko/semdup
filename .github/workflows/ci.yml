@@ -77,13 +77,17 @@ jobs:
           echo "$out" | grep -A1 'smoke_plant\.rs' | grep -q 'src/extract\.rs.* c_function_name$' || {
             echo "expected c_function_name as the plant's top neighbor"; exit 1; }
 
-      # Gate PRs on near-duplicates of what the PR itself touches.
+      # Gate PRs on new duplicate relationships, without failing old debt
+      # just because a PR touched nearby code.
       - name: Diff gate (PRs)
         if: github.event_name == 'pull_request'
         run: |
           git fetch --depth 1 origin "$BASE_REF"
-          target/release/semdup --db dogfood.sqlite diff --base "origin/$BASE_REF" \
+          target/release/semdup --db dogfood.sqlite ci \
+            --mode diff \
+            --base "origin/$BASE_REF" \
+            --refresh-base \
             --threshold "$DOGFOOD_THRESHOLD" \
-            --check
+            --policy new-pairs
         env:
           BASE_REF: ${{ github.base_ref }}

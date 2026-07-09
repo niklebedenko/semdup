@@ -74,6 +74,7 @@ mod tests {
             kind: UnitKind::Block,
             start_line,
             end_line,
+            effective_lines: end_line - start_line + 1,
             hash: "hash".to_string(),
             ignored: false,
             is_test: false,
@@ -180,7 +181,7 @@ pub fn run(conn: &Connection, model: &str, opts: &InjectEvalOpts<'_>) -> Result<
         let plant = injected
             .iter()
             .filter(|(u, _)| u.path.ends_with(&entry.file))
-            .max_by_key(|(u, _)| u.lines())
+            .max_by_key(|(u, _)| u.span_lines())
             .with_context(|| format!("no injected unit from file {}", entry.file))?;
         let original = OriginalSelector::parse(&entry.original)?;
 

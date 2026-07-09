@@ -150,7 +150,7 @@ pub fn run(conn: &Connection, model: &str, opts: &ScanOpts) -> Result<()> {
             )
         })
         .collect();
-    ordered.sort_by(|a, b| b.pairs[0].2.total_cmp(&a.pairs[0].2));
+    sort_clusters_for_display(&mut ordered, &units);
     let total_clusters = ordered.len();
     ordered.retain(|c| c.members.len() >= opts.min_cluster);
     let kept_pairs: usize = ordered.iter().map(|c| c.pairs.len()).sum();
@@ -330,6 +330,28 @@ struct Cluster {
     hidden_overlaps: usize,
 }
 
+fn sort_clusters_for_display(clusters: &mut [Cluster], units: &[(UnitRow, Vec<f32>)]) {
+    clusters.sort_by(|a, b| {
+        cluster_size_lines(b, units)
+            .cmp(&cluster_size_lines(a, units))
+            .then_with(|| cluster_top_score(b).total_cmp(&cluster_top_score(a)))
+            .then_with(|| a.members.first().cmp(&b.members.first()))
+    });
+}
+
+fn cluster_size_lines(cluster: &Cluster, units: &[(UnitRow, Vec<f32>)]) -> usize {
+    cluster
+        .members
+        .iter()
+        .map(|&member| units[member].0.span_lines())
+        .max()
+        .unwrap_or(0)
+}
+
+fn cluster_top_score(cluster: &Cluster) -> f32 {
+    cluster.pairs.first().map_or(0.0, |&(_, _, s)| s)
+}
+
 fn prune_larger_overlapping_members(
     cluster: Cluster,
     units: &[(UnitRow, Vec<f32>)],
@@ -361,7 +383,7 @@ fn larger_overlapping_members(members: &[usize], units: &[(UnitRow, Vec<f32>)]) 
 }
 
 fn is_larger_overlapping_unit(a: &UnitRow, b: &UnitRow) -> bool {
-    a.path == b.path && a.lines() > b.lines() && ranges_overlap(a, b)
+    a.path == b.path && a.span_lines() > b.span_lines() && ranges_overlap(a, b)
 }
 
 fn split_cluster_pairs(
@@ -443,7 +465,7 @@ pub fn load_scannable(
     let (units, n_overlap) = drop_larger_overlapping_blocks(units);
     let kind = unit_kind.map_or("all", UnitKind::as_str);
     eprintln!(
-        "scanning {} {kind} units (>= {min_lines} lines, {n_ignored} suppressed by semdup:ignore, {n_overlap} larger overlapping blocks skipped)",
+        "scanning {} {kind} units (>= {min_lines} effective lines, {n_ignored} suppressed by semdup:ignore, {n_overlap} larger overlapping blocks skipped)",
         units.len(),
     );
     Ok(units)
@@ -739,6 +761,7 @@ mod tests {
             kind: UnitKind::Function,
             start_line,
             end_line,
+            effective_lines: end_line - start_line + 1,
             hash: format!("{path}:{start_line}:{end_line}"),
             ignored: false,
             is_test: false,
@@ -809,6 +832,34 @@ mod tests {
         assert_eq!(bat_lang("typescript"), "ts");
         assert_eq!(bat_lang("python"), "py");
         assert_eq!(bat_lang("unknown"), "txt");
+    }
+
+    #[test]
+    fn display_clusters_sort_by_decreasing_largest_member_span() {
+        let units = vec![
+            (unit("small_a.rs", 1, 10), one_hot(4, 0)),
+            (unit("small_b.rs", 1, 10), one_hot(4, 1)),
+            (unit("large_a.rs", 1, 80), one_hot(4, 2)),
+            (unit("large_b.rs", 1, 80), one_hot(4, 3)),
+        ];
+        let mut clusters = vec![
+            Cluster {
+                members: vec![0, 1],
+                pairs: vec![(0, 1, 0.99)],
+                hidden_overlaps: 0,
+            },
+            Cluster {
+                members: vec![2, 3],
+                pairs: vec![(2, 3, 0.80)],
+                hidden_overlaps: 0,
+            },
+        ];
+
+        sort_clusters_for_display(&mut clusters, &units);
+
+        assert_eq!(clusters[0].members, vec![2, 3]);
+        assert_eq!(cluster_size_lines(&clusters[0], &units), 80);
+        assert_eq!(clusters[1].members, vec![0, 1]);
     }
 
     #[test]

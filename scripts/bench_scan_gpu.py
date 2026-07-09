@@ -54,7 +54,7 @@ def load_embeddings(args: argparse.Namespace) -> tuple[list[Unit], np.ndarray]:
         FROM units u JOIN embeddings e ON e.hash = u.hash AND e.model = ?
         WHERE u.corpus = 'main'
           AND u.ignored = 0
-          AND (u.end_line - u.start_line + 1) >= ?
+          AND u.effective_lines >= ?
           AND (? = 1 OR u.is_test = 0)
           AND (? IS NULL OR u.unit_kind = ?)
         """,

@@ -7,6 +7,7 @@
 //! above, the function signature. Thresholds are per repo and per model:
 //! dial one in by running `scan` at a few values against your own code.
 
+mod ci;
 mod config;
 mod db;
 mod diff;
@@ -122,7 +123,7 @@ enum Cmd {
         /// Candidate search index: exact, sparse, or auto.
         #[arg(long)]
         index: Option<String>,
-        /// Ignore units shorter than this many lines.
+        /// Ignore units with fewer effective body lines than this.
         #[arg(long)]
         min_lines: Option<usize>,
         /// Exclude test code from the scan.
@@ -153,11 +154,15 @@ enum Cmd {
         /// Base ref to diff the working tree against.
         #[arg(long, default_value = "HEAD")]
         base: String,
+        /// Ignore touched functions with fewer effective body lines than this.
         #[arg(long)]
         min_lines: Option<usize>,
         /// Threshold for DUP/REVIEW verdicts; omit for evidence-only output.
         #[arg(short = 't', long)]
         threshold: Option<f32>,
+        /// Which touched duplicate relationships are allowed to fail CI.
+        #[arg(long, value_enum, default_value_t = diff::DiffPolicy::Touched)]
+        policy: diff::DiffPolicy,
         #[arg(long)]
         skip_tests: bool,
         #[arg(long)]
@@ -165,6 +170,43 @@ enum Cmd {
         /// Exit nonzero if anything is flagged (for CI).
         #[arg(long)]
         check: bool,
+        #[command(flatten)]
+        embed: EmbedArgs,
+    },
+    /// CI-friendly wrapper: sensible defaults, optional base refresh, and
+    /// nonzero exit for PR duplicate findings.
+    Ci {
+        /// What to run. auto picks diff for PR/base runs and scan otherwise.
+        #[arg(long, value_enum, default_value_t = ci::CiMode::Auto)]
+        mode: ci::CiMode,
+        /// Base ref to diff against, e.g. origin/main. Defaults to
+        /// GITHUB_BASE_REF in GitHub Actions when available.
+        #[arg(long)]
+        base: Option<String>,
+        /// Before diffing, index the base ref in a temporary git worktree.
+        #[arg(long)]
+        refresh_base: bool,
+        /// Threshold for DUP/REVIEW verdicts. Defaults to config, then 0.85.
+        #[arg(short = 't', long)]
+        threshold: Option<f32>,
+        /// Which touched duplicate relationships are allowed to fail CI.
+        #[arg(long, value_enum, default_value_t = diff::DiffPolicy::NewPairs)]
+        policy: diff::DiffPolicy,
+        /// Ignore touched/scanned functions with fewer effective body lines.
+        #[arg(long)]
+        min_lines: Option<usize>,
+        /// Include test code. CI defaults to skipping tests unless configured.
+        #[arg(long)]
+        include_tests: bool,
+        /// Root directories to scan. Repeat or use semdup.toml.
+        #[arg(long)]
+        root: Vec<PathBuf>,
+        /// Path substrings to skip in addition to configured excludes.
+        #[arg(long)]
+        exclude: Vec<String>,
+        /// Write diff JSON for annotations and artifacts.
+        #[arg(long)]
+        json: Option<PathBuf>,
         #[command(flatten)]
         embed: EmbedArgs,
     },
@@ -178,6 +220,7 @@ enum Cmd {
         /// JSON: [{"file": "...", "original": "path::name", "level": 1}, ..]
         #[arg(long)]
         manifest: PathBuf,
+        /// Ignore corpus units with fewer effective body lines than this.
         #[arg(long)]
         min_lines: Option<usize>,
         /// Evaluate this extracted unit kind.
@@ -338,6 +381,7 @@ fn main() -> Result<()> {
     embed::provider_libs::reexec_with_absolute_argv0();
     let cli = Cli::parse();
     let cfg = Config::discover(&std::env::current_dir()?)?;
+
     let db_path = cli
         .db
         .clone()
@@ -463,6 +507,7 @@ fn main() -> Result<()> {
             base,
             min_lines,
             threshold,
+            policy,
             skip_tests,
             json,
             check,
@@ -473,6 +518,7 @@ fn main() -> Result<()> {
                 base,
                 min_lines: min_lines.or(cfg.scan.min_lines).unwrap_or(5),
                 threshold: threshold.or(cfg.scan.threshold),
+                policy,
                 json: json.as_deref(),
                 skip_tests: skip_tests || cfg.scan.skip_tests.unwrap_or(false),
                 strip_comments: cfg.extract.strip_comments.unwrap_or(false),
@@ -481,6 +527,39 @@ fn main() -> Result<()> {
             let mut mk = || make_backend(&args, &cfg, &model);
             let findings = diff::run(&conn, &model.key, &opts, &mut mk)?;
             if check && findings > 0 {
+                db::checkpoint(&conn)?;
+                std::process::exit(1);
+            }
+        }
+        Cmd::Ci {
+            mode,
+            base,
+            refresh_base,
+            threshold,
+            policy,
+            min_lines,
+            include_tests,
+            root,
+            exclude,
+            json,
+            embed,
+        } => {
+            let opts = ci::CiOpts {
+                mode,
+                base,
+                refresh_base,
+                threshold,
+                policy,
+                min_lines,
+                include_tests,
+                roots: root,
+                exclude,
+                json: json.as_deref(),
+                embed,
+            };
+            let findings = ci::run(&conn, &cfg, &opts)?;
+            if findings > 0 {
+                db::checkpoint(&conn)?;
                 std::process::exit(1);
             }
         }
@@ -506,5 +585,6 @@ fn main() -> Result<()> {
         }
         Cmd::Status => db::print_status(&conn)?,
     }
+    db::checkpoint(&conn)?;
     Ok(())
 }

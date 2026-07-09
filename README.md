@@ -40,6 +40,48 @@ semdup diff --base origin/main --check # built-in PR review mode
 `semdup scan --show-bodies` syntax-highlights snippets when stdout is a
 terminal. Use `--color always` or `--color never` to override that.
 
+## GitHub Actions
+
+The lowest-friction setup is the reusable workflow:
+
+```yaml
+name: Semdup
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  semdup:
+    uses: niklebedenko/semdup/.github/workflows/semdup.yml@v1
+```
+
+For custom workflows, use the action as a step:
+
+```yaml
+- uses: actions/checkout@v4
+- uses: niklebedenko/semdup@v1
+```
+
+The action restores the model cache, restores the SQLite embedding DB
+(`semdup.sqlite*`), fetches the PR base ref, refreshes the base corpus in a
+temporary worktree, runs `semdup ci`, emits GitHub annotations, and saves
+updated caches only from trusted default-branch pushes. With no `semdup.toml`,
+CI auto-detects source roots and uses conservative defaults: function-only
+indexing, `min_lines = 8`, `skip_tests = true`, and threshold `0.85`.
+
+Tune only what you need:
+
+```yaml
+jobs:
+  semdup:
+    uses: niklebedenko/semdup/.github/workflows/semdup.yml@v1
+    with:
+      threshold: "0.88"
+      roots: src,lib
+```
+
 The `init` step can take some time (about 30s on my midrange GPU on a 500k-line repo).
 After the first initialisation, everything else is incremental and super fast.
 
@@ -80,7 +122,7 @@ respect_gitignore = true # default: skip files ignored by git
 
 [scan]
 threshold = 0.625   # yours will differ: sweep a few values on your own repo
-min_lines = 8
+min_lines = 8       # effective body lines; signatures, blanks, and brace-only lines do not count
 skip_tests = true
 index = "exact"     # exact | sparse | auto
 # unit_kind = "block" # function | block; omit to scan all extracted units

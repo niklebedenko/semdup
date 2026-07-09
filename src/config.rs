@@ -26,7 +26,7 @@ pub const CPU_NBITS_INT4_MODEL: &str = "nomic-ai/CodeRankEmbed@cpu-nbits-int4-as
 /// cache key so its embeddings do not collide with the default fp32/fp16 keys.
 pub const CPU_INT8_MODEL: &str = "nomic-ai/CodeRankEmbed@cpu-int8-dynamic";
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// SQLite cache path (relative paths resolve against the config file).
@@ -39,7 +39,7 @@ pub struct Config {
     pub scan: Scan,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Extract {
     pub roots: Option<Vec<PathBuf>>,
@@ -54,7 +54,7 @@ pub struct Extract {
     pub min_block_lines: Option<usize>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Embed {
     /// Embedding model id; also the cache key for vectors.
@@ -69,13 +69,14 @@ pub struct Embed {
     pub script: Option<PathBuf>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Scan {
     /// Cosine threshold; per repo and per model, so dial it in on your own code.
     pub threshold: Option<f32>,
     /// Candidate search index: "exact", "sparse", or "auto".
     pub index: Option<String>,
+    /// Minimum effective body lines: blank/signature/brace-only lines do not count.
     pub min_lines: Option<usize>,
     pub skip_tests: Option<bool>,
     /// Limit scans to one unit kind: "function" or "block".
