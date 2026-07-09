@@ -100,8 +100,6 @@ fn github_base_ref() -> Option<String> {
     let base = std::env::var("GITHUB_BASE_REF").ok()?;
     if base.is_empty() {
         None
-    } else if base.contains('/') {
-        Some(format!("origin/{base}"))
     } else {
         Some(format!("origin/{base}"))
     }
