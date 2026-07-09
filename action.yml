@@ -69,12 +69,15 @@ runs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 1
+        persist-credentials: false
 
     - name: Prepare paths
       id: prep
       shell: bash
+      env:
+        INPUT_DB_PATH: ${{ inputs['db-path'] }}
       run: |
-        db_path="${{ inputs['db-path'] }}"
+        db_path="$INPUT_DB_PATH"
         if [[ "$db_path" != /* ]]; then
           db_path="$GITHUB_WORKSPACE/$db_path"
         fi
@@ -99,14 +102,17 @@ runs:
 
     - name: Install semdup
       shell: bash
+      env:
+        INPUT_INSTALL_COMMAND: ${{ inputs['install-command'] }}
+        INPUT_FEATURES: ${{ inputs.features }}
       run: |
         set -euo pipefail
-        if [[ -n "${{ inputs['install-command'] }}" ]]; then
-          eval "${{ inputs['install-command'] }}"
+        if [[ -n "$INPUT_INSTALL_COMMAND" ]]; then
+          eval "$INPUT_INSTALL_COMMAND"
         elif command -v semdup >/dev/null 2>&1 && semdup ci --help >/dev/null 2>&1; then
           semdup --version
         else
-          features="${{ inputs.features }}"
+          features="$INPUT_FEATURES"
           if [[ "$features" == "default" || -z "$features" ]]; then
             cargo install --path "$GITHUB_ACTION_PATH" --locked
           else
@@ -154,6 +160,7 @@ runs:
         INPUT_MODEL: ${{ inputs.model }}
         INPUT_BACKEND: ${{ inputs.backend }}
         INPUT_PROVIDER: ${{ inputs.provider }}
+        GITHUB_TOKEN: ${{ github.token }}
         SEMDUP_DB: ${{ steps.prep.outputs.db_path }}
         SEMDUP_REPORT: ${{ steps.prep.outputs.report_path }}
       run: |
@@ -173,7 +180,13 @@ runs:
           if [[ "$fetch_ref" == origin/* ]]; then
             fetch_ref="${fetch_ref#origin/}"
           fi
-          git fetch --no-tags --depth=1 origin "$fetch_ref:refs/remotes/origin/$fetch_ref"
+          fetch_spec="$fetch_ref:refs/remotes/origin/$fetch_ref"
+          if [[ -n "${GITHUB_TOKEN:-}" && -n "${GITHUB_SERVER_URL:-}" ]]; then
+            auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+            git -c "http.${GITHUB_SERVER_URL}/.extraheader=AUTHORIZATION: basic $auth_header" fetch --no-tags --depth=1 origin "$fetch_spec"
+          else
+            git fetch --no-tags --depth=1 origin "$fetch_spec"
+          fi
           base_arg=(--base "origin/$fetch_ref" --refresh-base)
         fi
 

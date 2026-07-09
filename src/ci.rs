@@ -158,16 +158,15 @@ fn refresh_base_corpus(
     opts: &CiOpts,
     base: &str,
 ) -> Result<()> {
-    let current_repo = std::env::current_dir()?;
+    let current_repo = current_repo_root()?;
     let worktree = BaseWorktree::add(base)?;
     let mut base_cfg = current_cfg.clone();
     if let Some(roots) = &current_cfg.extract.roots {
-        base_cfg.extract.roots = Some(
-            roots
-                .iter()
-                .map(|root| rebase_root(root, &current_repo, &worktree.path))
-                .collect(),
-        );
+        let roots = roots
+            .iter()
+            .map(|root| rebase_root(root, &current_repo, &worktree.path))
+            .collect::<Result<Vec<_>>>()?;
+        base_cfg.extract.roots = Some(roots);
     }
     eprintln!("semdup ci: refreshing base corpus from {base}");
     refresh(conn, &base_cfg, &opts.embed)
@@ -206,9 +205,12 @@ fn ci_config(cfg: &Config, repo: &Path, opts: &CiOpts) -> Result<Config> {
             .extend(opts.exclude.clone());
     }
     cfg.extract.respect_gitignore.get_or_insert(true);
-    cfg.extract
-        .granularity
-        .get_or_insert_with(|| vec![UnitKind::Function]);
+    cfg.extract.granularity.get_or_insert_with(|| {
+        cfg.scan
+            .unit_kind
+            .map(|kind| vec![kind])
+            .unwrap_or_else(|| vec![UnitKind::Function])
+    });
     cfg.extract.min_block_lines.get_or_insert(8);
     cfg.scan.threshold.get_or_insert(DEFAULT_CI_THRESHOLD);
     cfg.scan.min_lines.get_or_insert(DEFAULT_CI_MIN_LINES);
@@ -224,10 +226,30 @@ fn absolutize(repo: &Path, path: &Path) -> PathBuf {
     }
 }
 
-fn rebase_root(root: &Path, from_repo: &Path, to_repo: &Path) -> PathBuf {
-    root.strip_prefix(from_repo)
-        .map(|rel| to_repo.join(rel))
-        .unwrap_or_else(|_| root.to_path_buf())
+fn current_repo_root() -> Result<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output();
+    if let Ok(output) = output
+        && output.status.success()
+    {
+        let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !root.is_empty() {
+            return Ok(PathBuf::from(root));
+        }
+    }
+    std::env::current_dir().context("resolving current directory")
+}
+
+fn rebase_root(root: &Path, from_repo: &Path, to_repo: &Path) -> Result<PathBuf> {
+    let rel = root.strip_prefix(from_repo).with_context(|| {
+        format!(
+            "configured root {} is outside repository {}; cannot refresh base corpus safely",
+            root.display(),
+            from_repo.display()
+        )
+    })?;
+    Ok(to_repo.join(rel))
 }
 
 fn threshold(cfg: &Config, opts: &CiOpts) -> f32 {
@@ -284,5 +306,98 @@ impl Drop for BaseWorktree {
             .arg(&self.path)
             .status();
         let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_embed_args() -> EmbedArgs {
+        EmbedArgs {
+            model: None,
+            backend: None,
+            provider: None,
+            model_dir: None,
+            script: None,
+        }
+    }
+
+    fn opts() -> CiOpts<'static> {
+        CiOpts {
+            mode: CiMode::Auto,
+            base: None,
+            refresh_base: false,
+            threshold: None,
+            policy: DiffPolicy::NewPairs,
+            min_lines: None,
+            include_tests: false,
+            roots: Vec::new(),
+            exclude: Vec::new(),
+            json: None,
+            embed: empty_embed_args(),
+        }
+    }
+
+    #[test]
+    fn ci_config_uses_scan_unit_kind_when_defaulting_granularity() {
+        let repo = Path::new("/repo");
+        let mut cfg = Config::default();
+        cfg.extract.roots = Some(vec![repo.join("src")]);
+        cfg.scan.unit_kind = Some(UnitKind::Block);
+
+        let resolved = ci_config(&cfg, repo, &opts()).unwrap();
+
+        assert_eq!(resolved.extract.granularity, Some(vec![UnitKind::Block]));
+    }
+
+    #[test]
+    fn ci_config_keeps_explicit_extract_granularity() {
+        let repo = Path::new("/repo");
+        let mut cfg = Config::default();
+        cfg.extract.roots = Some(vec![repo.join("src")]);
+        cfg.extract.granularity = Some(vec![UnitKind::Function, UnitKind::Block]);
+        cfg.scan.unit_kind = Some(UnitKind::Block);
+
+        let resolved = ci_config(&cfg, repo, &opts()).unwrap();
+
+        assert_eq!(
+            resolved.extract.granularity,
+            Some(vec![UnitKind::Function, UnitKind::Block])
+        );
+    }
+
+    #[test]
+    fn rebase_root_rewrites_roots_inside_the_current_repo() {
+        let rebased = rebase_root(
+            Path::new("/repo/src"),
+            Path::new("/repo"),
+            Path::new("/tmp/base"),
+        )
+        .unwrap();
+
+        assert_eq!(rebased, Path::new("/tmp/base/src"));
+    }
+
+    #[test]
+    fn rebase_root_rejects_roots_outside_the_current_repo() {
+        let err = rebase_root(
+            Path::new("/other/src"),
+            Path::new("/repo"),
+            Path::new("/tmp/base"),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("outside repository"));
+    }
+
+    #[test]
+    fn include_tests_overrides_ci_test_skipping_default() {
+        let mut cfg = Config::default();
+        cfg.scan.skip_tests = Some(true);
+        let mut opts = opts();
+        opts.include_tests = true;
+
+        assert!(!skip_tests(&cfg, &opts));
     }
 }

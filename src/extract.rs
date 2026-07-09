@@ -594,7 +594,8 @@ fn unit_of<'a>(node: Node<'a>, src: &str, lang: &str) -> Option<UnitSyntax<'a>> 
         "csharp" => match kind {
             "method_declaration" | "constructor_declaration" | "local_function_statement" => {
                 let name = node.child_by_field_name("name")?;
-                Some(syntax_unit(name, node, node, src))
+                let unit = syntax_unit(name, node, node, src);
+                unit.body_node.is_some().then_some(unit)
             }
             _ => None,
         },
@@ -1012,10 +1013,16 @@ class Widget {
     #[test]
     fn csharp_extraction_methods_constructors_locals() {
         let src = r#"
+abstract class BaseWidget {
+    public abstract int Missing(int by);
+}
+
 class Widget {
     Widget(int size) {
         _size = size;
     }
+
+    int Projected(int by) => by * 2;
 
     int Grow(int by) {
         int Doubled(int x) => x * 2;
@@ -1031,7 +1038,12 @@ class Widget {
         let units = extract_file(Path::new("Widget.cs"), src, false).unwrap();
         let by_name = |n: &str| units.iter().find(|u| u.name == n).unwrap();
         let names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
-        assert_eq!(names, ["Widget", "Grow", "Doubled", "GrowsByAmount"]);
+        assert_eq!(
+            names,
+            ["Widget", "Projected", "Grow", "Doubled", "GrowsByAmount"]
+        );
+        assert!(units.iter().all(|u| u.name != "Missing"));
+        assert_eq!(by_name("Projected").effective_lines, 1);
         assert!(by_name("GrowsByAmount").is_test);
         assert!(!by_name("Grow").is_test);
     }
