@@ -46,6 +46,7 @@ pub struct Unit {
     pub kind: UnitKind,
     pub start_line: usize,
     pub end_line: usize,
+    pub effective_lines: usize,
     pub hash: String,
     pub text: String,
     pub ignored: bool,
@@ -54,7 +55,7 @@ pub struct Unit {
 
 impl Unit {
     pub fn lines(&self) -> usize {
-        self.end_line - self.start_line + 1
+        self.effective_lines
     }
 }
 
@@ -284,18 +285,19 @@ fn walk(
     out: &mut Vec<Unit>,
 ) {
     let mut child_context = function_context.cloned();
-    if let Some((name, span_node)) = unit_of(node, src, lang) {
-        let ignored = has_ignore_directive(lines, span_node.start_position().row + 1);
+    if let Some(unit) = unit_of(node, src, lang) {
+        let ignored = has_ignore_directive(lines, unit.span_node.start_position().row + 1);
         let is_test = path_is_test || is_test_node(node, src, lang);
         if opts.includes(UnitKind::Function) {
             push_unit(
                 out,
                 UnitSpec {
                     path,
-                    name: name.clone(),
+                    name: unit.name.clone(),
                     lang,
                     kind: UnitKind::Function,
-                    span_node,
+                    span_node: unit.span_node,
+                    effective_node: unit.body_node,
                     src,
                     lines,
                     strip_comments: opts.strip_comments,
@@ -306,7 +308,7 @@ fn walk(
             );
         }
         child_context = Some(FunctionContext {
-            name,
+            name: unit.name,
             ignored,
             is_test,
         });
@@ -325,6 +327,7 @@ fn walk(
                 lang,
                 kind: UnitKind::Block,
                 span_node: node,
+                effective_node: Some(node),
                 src,
                 lines,
                 strip_comments: opts.strip_comments,
@@ -357,6 +360,7 @@ struct UnitSpec<'a> {
     lang: &'a str,
     kind: UnitKind,
     span_node: Node<'a>,
+    effective_node: Option<Node<'a>>,
     src: &'a str,
     lines: &'a [&'a str],
     strip_comments: bool,
@@ -371,6 +375,8 @@ fn push_unit(out: &mut Vec<Unit>, spec: UnitSpec<'_>) {
     if end_line.saturating_sub(start_line) + 1 < spec.min_lines {
         return;
     }
+    let effective_node = spec.effective_node.unwrap_or(spec.span_node);
+    let effective_lines = effective_line_count(&stripped_text(effective_node, spec.src, spec.lang));
     let text = if spec.strip_comments {
         stripped_text(spec.span_node, spec.src, spec.lang)
     } else {
@@ -386,6 +392,7 @@ fn push_unit(out: &mut Vec<Unit>, spec: UnitSpec<'_>) {
         kind: spec.kind,
         start_line,
         end_line,
+        effective_lines,
         hash: blake3::hash(text.as_bytes()).to_hex().to_string(),
         text,
         ignored: spec.ignored || has_ignore_directive(spec.lines, start_line),
@@ -461,6 +468,24 @@ fn stripped_text(span: Node, src: &str, lang: &str) -> String {
         .join("\n")
 }
 
+fn effective_line_count(text: &str) -> usize {
+    text.lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && !is_structural_only_line(trimmed)
+        })
+        .count()
+}
+
+fn is_structural_only_line(line: &str) -> bool {
+    line.chars().all(|ch| {
+        matches!(
+            ch,
+            '{' | '}' | '[' | ']' | '(' | ')' | ';' | ',' | ':' | '.'
+        )
+    })
+}
+
 fn collect_strip_ranges(node: Node, lang: &str, out: &mut Vec<(usize, usize)>) {
     // Kind names across our grammars: rust/java use line_comment/block_comment,
     // the rest use comment.
@@ -492,15 +517,33 @@ fn is_python_docstring(node: Node) -> bool {
         })
 }
 
-/// Returns (name, node spanning the unit text) if `node` starts a function-like unit.
-fn unit_of<'a>(node: Node<'a>, src: &str, lang: &str) -> Option<(String, Node<'a>)> {
+struct UnitSyntax<'a> {
+    name: String,
+    span_node: Node<'a>,
+    body_node: Option<Node<'a>>,
+}
+
+fn syntax_unit<'a>(
+    name: Node<'a>,
+    span_node: Node<'a>,
+    body_source: Node<'a>,
+    src: &str,
+) -> UnitSyntax<'a> {
+    UnitSyntax {
+        name: src[name.byte_range()].to_string(),
+        span_node,
+        body_node: body_source.child_by_field_name("body"),
+    }
+}
+
+/// Returns syntax nodes for a function-like unit.
+fn unit_of<'a>(node: Node<'a>, src: &str, lang: &str) -> Option<UnitSyntax<'a>> {
     let kind = node.kind();
-    let name_text = |n: Node| src[n.byte_range()].to_string();
     match lang {
         "rust" => {
             if kind == "function_item" {
                 let name = node.child_by_field_name("name")?;
-                Some((name_text(name), node))
+                Some(syntax_unit(name, node, node, src))
             } else {
                 None
             }
@@ -508,13 +551,13 @@ fn unit_of<'a>(node: Node<'a>, src: &str, lang: &str) -> Option<(String, Node<'a
         "typescript" => match kind {
             "function_declaration" | "generator_function_declaration" | "method_definition" => {
                 let name = node.child_by_field_name("name")?;
-                Some((name_text(name), node))
+                Some(syntax_unit(name, node, node, src))
             }
             "variable_declarator" => {
                 let value = node.child_by_field_name("value")?;
                 if matches!(value.kind(), "arrow_function" | "function_expression") {
                     let name = node.child_by_field_name("name")?;
-                    Some((name_text(name), node))
+                    Some(syntax_unit(name, node, value, src))
                 } else {
                     None
                 }
@@ -529,7 +572,7 @@ fn unit_of<'a>(node: Node<'a>, src: &str, lang: &str) -> Option<(String, Node<'a
                     Some(p) if p.kind() == "decorated_definition" => p,
                     _ => node,
                 };
-                Some((name_text(name), span))
+                Some(syntax_unit(name, span, node, src))
             } else {
                 None
             }
@@ -537,28 +580,28 @@ fn unit_of<'a>(node: Node<'a>, src: &str, lang: &str) -> Option<(String, Node<'a
         "go" => match kind {
             "function_declaration" | "method_declaration" => {
                 let name = node.child_by_field_name("name")?;
-                Some((name_text(name), node))
+                Some(syntax_unit(name, node, node, src))
             }
             _ => None,
         },
         "java" => match kind {
             "method_declaration" | "constructor_declaration" => {
                 let name = node.child_by_field_name("name")?;
-                Some((name_text(name), node))
+                Some(syntax_unit(name, node, node, src))
             }
             _ => None,
         },
         "csharp" => match kind {
             "method_declaration" | "constructor_declaration" | "local_function_statement" => {
                 let name = node.child_by_field_name("name")?;
-                Some((name_text(name), node))
+                Some(syntax_unit(name, node, node, src))
             }
             _ => None,
         },
         "php" => match kind {
             "function_definition" | "method_declaration" => {
                 let name = node.child_by_field_name("name")?;
-                Some((name_text(name), node))
+                Some(syntax_unit(name, node, node, src))
             }
             _ => None,
         },
@@ -566,7 +609,7 @@ fn unit_of<'a>(node: Node<'a>, src: &str, lang: &str) -> Option<(String, Node<'a
             // `def foo` and `def self.foo`.
             "method" | "singleton_method" => {
                 let name = node.child_by_field_name("name")?;
-                Some((name_text(name), node))
+                Some(syntax_unit(name, node, node, src))
             }
             _ => None,
         },
@@ -578,7 +621,7 @@ fn unit_of<'a>(node: Node<'a>, src: &str, lang: &str) -> Option<(String, Node<'a
                     Some(p) if p.kind() == "template_declaration" => p,
                     _ => node,
                 };
-                Some((name_text(name), span))
+                Some(syntax_unit(name, span, node, src))
             } else {
                 None
             }
@@ -808,6 +851,27 @@ mod tests {
         assert!(by_name("check").is_test);
         assert_eq!(by_name("read_thing").start_line, 3);
         assert_eq!(by_name("read_thing").end_line, 5);
+    }
+
+    #[test]
+    fn effective_lines_count_body_not_signature_or_structural_shell() {
+        let src = r#"
+fn padded(
+    alpha: u32,
+    beta: u32,
+) -> Result<u32, String>
+where
+    u32: Copy,
+{
+    // explanatory prose
+
+    Ok(alpha + beta)
+}
+"#;
+        let units = extract_file(Path::new("lib.rs"), src, false).unwrap();
+        assert_eq!(units.len(), 1);
+        assert!(units[0].end_line - units[0].start_line + 1 > 8);
+        assert_eq!(units[0].lines(), 1);
     }
 
     #[test]

@@ -68,7 +68,10 @@ pub fn run(dir: &Path, yes: bool) -> Result<PathBuf> {
     let min_lines = if yes {
         DEFAULT_MIN_LINES
     } else {
-        prompt_parse("ignore functions shorter than (lines)", DEFAULT_MIN_LINES)?
+        prompt_parse(
+            "ignore functions shorter than (effective body lines)",
+            DEFAULT_MIN_LINES,
+        )?
     };
     let skip_tests = if yes {
         true
@@ -117,7 +120,7 @@ fn render_config(roots: &[String], threshold: f32, min_lines: usize, skip_tests:
 /// Top-level directories (relative to `dir`) that contain supported source
 /// files, plus a per-language file count. Files at the repo root put "." in
 /// the list.
-fn detect_roots(dir: &Path) -> Result<(Vec<String>, BTreeMap<&'static str, usize>)> {
+pub(crate) fn detect_roots(dir: &Path) -> Result<(Vec<String>, BTreeMap<&'static str, usize>)> {
     let files = list_files(dir)?;
     let mut roots: Vec<String> = Vec::new();
     let mut by_lang: BTreeMap<&'static str, usize> = BTreeMap::new();

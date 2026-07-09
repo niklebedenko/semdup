@@ -1,0 +1,241 @@
+name: semdup
+description: Run semdup duplicate detection with model and embedding caches.
+
+inputs:
+  mode:
+    description: "auto, diff, scan, or both. auto runs diff for PRs and scan otherwise."
+    default: auto
+  policy:
+    description: "diff policy: touched, new-pairs, or added."
+    default: new-pairs
+  threshold:
+    description: "Cosine threshold, or auto to use semdup.toml/CI default."
+    default: auto
+  min-lines:
+    description: "Minimum effective function body lines, or auto."
+    default: auto
+  skip-tests:
+    description: "Whether to skip test code."
+    default: "true"
+  base-ref:
+    description: "PR base branch/ref. Defaults to GITHUB_BASE_REF."
+    default: ""
+  roots:
+    description: "Comma-separated source roots. Defaults to semdup.toml or auto-detection."
+    default: ""
+  exclude:
+    description: "Comma-separated path substrings to exclude."
+    default: ""
+  model:
+    description: "Embedding model key. Empty uses semdup defaults/config."
+    default: ""
+  backend:
+    description: "Embedding backend: onnx or sidecar. Empty uses semdup defaults/config."
+    default: ""
+  provider:
+    description: "ONNX provider: auto, cpu, or cuda."
+    default: auto
+  features:
+    description: "Cargo features used when building semdup from this action: default, or an extra feature list such as cuda."
+    default: default
+  db-path:
+    description: "SQLite embedding DB path."
+    default: .semdup/cache/semdup.sqlite
+  cache:
+    description: "Restore/save semdup model, binary, and embedding DB caches."
+    default: "true"
+  checkout:
+    description: "auto, true, or false. auto checks out the repository only when the workspace is empty."
+    default: auto
+  install-command:
+    description: "Optional custom command that installs a semdup binary on PATH."
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Check workspace
+      id: workspace
+      shell: bash
+      run: |
+        if git -C "$GITHUB_WORKSPACE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+          echo "needs_checkout=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "needs_checkout=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Checkout repository
+      if: inputs.checkout == 'true' || (inputs.checkout == 'auto' && steps.workspace.outputs.needs_checkout == 'true')
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Prepare paths
+      id: prep
+      shell: bash
+      run: |
+        db_path="${{ inputs['db-path'] }}"
+        if [[ "$db_path" != /* ]]; then
+          db_path="$GITHUB_WORKSPACE/$db_path"
+        fi
+        report_path="$GITHUB_WORKSPACE/.semdup/semdup-diff.json"
+        mkdir -p "$(dirname "$db_path")" "$(dirname "$report_path")"
+        echo "db_path=$db_path" >> "$GITHUB_OUTPUT"
+        echo "report_path=$report_path" >> "$GITHUB_OUTPUT"
+
+    - name: Restore semdup binary cache
+      if: inputs.cache == 'true' && inputs['install-command'] == ''
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/semdup
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: semdup-cargo-${{ runner.os }}-${{ github.action_ref || github.sha }}-${{ inputs.features }}
+
+    - name: Install Rust toolchain
+      if: inputs['install-command'] == ''
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install semdup
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -n "${{ inputs['install-command'] }}" ]]; then
+          eval "${{ inputs['install-command'] }}"
+        elif command -v semdup >/dev/null 2>&1 && semdup ci --help >/dev/null 2>&1; then
+          semdup --version
+        else
+          features="${{ inputs.features }}"
+          if [[ "$features" == "default" || -z "$features" ]]; then
+            cargo install --path "$GITHUB_ACTION_PATH" --locked
+          else
+            cargo install --path "$GITHUB_ACTION_PATH" --locked --features "$features"
+          fi
+          semdup --version
+        fi
+
+    - name: Restore semdup model cache
+      id: model-cache
+      if: inputs.cache == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/semdup
+        key: semdup-model-${{ runner.os }}-${{ inputs.model || 'default' }}-${{ inputs.provider }}
+        restore-keys: |
+          semdup-model-${{ runner.os }}-${{ inputs.model || 'default' }}-
+          semdup-model-${{ runner.os }}-
+
+    - name: Restore semdup embedding DB
+      id: db-cache
+      if: inputs.cache == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ${{ steps.prep.outputs.db_path }}
+          ${{ steps.prep.outputs.db_path }}-shm
+          ${{ steps.prep.outputs.db_path }}-wal
+        key: semdup-db-${{ runner.os }}-schema3-${{ github.action_ref || github.sha }}-${{ inputs.model || 'default' }}-${{ hashFiles('semdup.toml') }}-${{ github.sha }}
+        restore-keys: |
+          semdup-db-${{ runner.os }}-schema3-${{ github.action_ref || github.sha }}-${{ inputs.model || 'default' }}-${{ hashFiles('semdup.toml') }}-
+          semdup-db-${{ runner.os }}-schema3-${{ github.action_ref || github.sha }}-${{ inputs.model || 'default' }}-
+
+    - name: Run semdup
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_POLICY: ${{ inputs.policy }}
+        INPUT_THRESHOLD: ${{ inputs.threshold }}
+        INPUT_MIN_LINES: ${{ inputs['min-lines'] }}
+        INPUT_SKIP_TESTS: ${{ inputs['skip-tests'] }}
+        INPUT_BASE_REF: ${{ inputs['base-ref'] }}
+        INPUT_ROOTS: ${{ inputs.roots }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_BACKEND: ${{ inputs.backend }}
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        SEMDUP_DB: ${{ steps.prep.outputs.db_path }}
+        SEMDUP_REPORT: ${{ steps.prep.outputs.report_path }}
+      run: |
+        set -euo pipefail
+
+        base_ref="$INPUT_BASE_REF"
+        if [[ -z "$base_ref" && -n "${GITHUB_BASE_REF:-}" ]]; then
+          base_ref="$GITHUB_BASE_REF"
+        fi
+
+        base_arg=()
+        if [[ -n "$base_ref" ]]; then
+          fetch_ref="$base_ref"
+          if [[ "$fetch_ref" == refs/heads/* ]]; then
+            fetch_ref="${fetch_ref#refs/heads/}"
+          fi
+          if [[ "$fetch_ref" == origin/* ]]; then
+            fetch_ref="${fetch_ref#origin/}"
+          fi
+          git fetch --no-tags --depth=1 origin "$fetch_ref:refs/remotes/origin/$fetch_ref"
+          base_arg=(--base "origin/$fetch_ref" --refresh-base)
+        fi
+
+        args=(--db "$SEMDUP_DB" ci --mode "$INPUT_MODE" --policy "$INPUT_POLICY" --json "$SEMDUP_REPORT")
+        args+=("${base_arg[@]}")
+
+        if [[ "$INPUT_THRESHOLD" != "auto" && -n "$INPUT_THRESHOLD" ]]; then
+          args+=(--threshold "$INPUT_THRESHOLD")
+        fi
+        if [[ "$INPUT_MIN_LINES" != "auto" && -n "$INPUT_MIN_LINES" ]]; then
+          args+=(--min-lines "$INPUT_MIN_LINES")
+        fi
+        if [[ "$INPUT_SKIP_TESTS" != "true" ]]; then
+          args+=(--include-tests)
+        fi
+        if [[ -n "$INPUT_MODEL" ]]; then
+          args+=(--model "$INPUT_MODEL")
+        fi
+        if [[ -n "$INPUT_BACKEND" ]]; then
+          args+=(--backend "$INPUT_BACKEND")
+        fi
+        if [[ -n "$INPUT_PROVIDER" && "$INPUT_PROVIDER" != "auto" ]]; then
+          args+=(--provider "$INPUT_PROVIDER")
+        fi
+        if [[ -n "$INPUT_ROOTS" ]]; then
+          IFS=',' read -r -a roots <<< "$INPUT_ROOTS"
+          for root in "${roots[@]}"; do
+            root="${root#"${root%%[![:space:]]*}"}"
+            root="${root%"${root##*[![:space:]]}"}"
+            [[ -n "$root" ]] && args+=(--root "$root")
+          done
+        fi
+        if [[ -n "$INPUT_EXCLUDE" ]]; then
+          IFS=',' read -r -a excludes <<< "$INPUT_EXCLUDE"
+          for exclude in "${excludes[@]}"; do
+            exclude="${exclude#"${exclude%%[![:space:]]*}"}"
+            exclude="${exclude%"${exclude##*[![:space:]]}"}"
+            [[ -n "$exclude" ]] && args+=(--exclude "$exclude")
+          done
+        fi
+
+        set +e
+        semdup "${args[@]}"
+        status=$?
+        set -e
+
+        python3 "$GITHUB_ACTION_PATH/scripts/semdup-github-report.py" "$SEMDUP_REPORT" "${GITHUB_STEP_SUMMARY:-}" || true
+        exit "$status"
+
+    - name: Save semdup model cache
+      if: inputs.cache == 'true' && steps.model-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cache/semdup
+        key: semdup-model-${{ runner.os }}-${{ inputs.model || 'default' }}-${{ inputs.provider }}
+
+    - name: Save semdup embedding DB
+      if: inputs.cache == 'true' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ${{ steps.prep.outputs.db_path }}
+          ${{ steps.prep.outputs.db_path }}-shm
+          ${{ steps.prep.outputs.db_path }}-wal
+        key: semdup-db-${{ runner.os }}-schema3-${{ github.action_ref || github.sha }}-${{ inputs.model || 'default' }}-${{ hashFiles('semdup.toml') }}-${{ github.sha }}
