@@ -26,6 +26,9 @@ pub const CPU_NBITS_INT4_MODEL: &str = "nomic-ai/CodeRankEmbed@cpu-nbits-int4-as
 /// cache key so its embeddings do not collide with the default fp32/fp16 keys.
 pub const CPU_INT8_MODEL: &str = "nomic-ai/CodeRankEmbed@cpu-int8-dynamic";
 
+/// Default Titan model used by the Bedrock backend when no model is named.
+pub const DEFAULT_BEDROCK_MODEL: &str = "amazon.titan-embed-text-v2:0";
+
 #[derive(Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -59,10 +62,12 @@ pub struct Extract {
 pub struct Embed {
     /// Embedding model id; also the cache key for vectors.
     pub model: Option<String>,
-    /// "onnx" (built-in) or "sidecar" (external python script).
+    /// "onnx" (built-in), "bedrock" (Amazon Bedrock), or "sidecar".
     pub backend: Option<String>,
     /// ONNX execution provider: "auto", "cpu", or "cuda".
     pub provider: Option<String>,
+    /// AWS region for the Bedrock backend; defaults to the AWS SDK chain.
+    pub region: Option<String>,
     /// ONNX backend: directory holding model.onnx + tokenizer.json + semdup-model.json.
     pub model_dir: Option<PathBuf>,
     /// Sidecar backend: script path.
@@ -141,6 +146,7 @@ mod tests {
             model = "nomic-ai/CodeRankEmbed"
             backend = "onnx"
             provider = "cpu"
+            region = "us-east-1"
             [scan]
             threshold = 0.625
             index = "sparse"
@@ -162,6 +168,7 @@ mod tests {
         );
         assert_eq!(cfg.extract.min_block_lines, Some(10));
         assert_eq!(cfg.embed.provider.as_deref(), Some("cpu"));
+        assert_eq!(cfg.embed.region.as_deref(), Some("us-east-1"));
         assert_eq!(cfg.scan.threshold, Some(0.625));
         assert_eq!(cfg.scan.index.as_deref(), Some("sparse"));
         assert_eq!(cfg.scan.unit_kind, Some(UnitKind::Block));

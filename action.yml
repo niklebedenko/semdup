@@ -30,11 +30,14 @@ inputs:
     description: "Embedding model key. Empty uses semdup defaults/config."
     default: ""
   backend:
-    description: "Embedding backend: onnx or sidecar. Empty uses semdup defaults/config."
+    description: "Embedding backend: onnx, bedrock, or sidecar. Empty uses semdup defaults/config."
     default: ""
   provider:
     description: "ONNX provider: auto, cpu, or cuda."
     default: auto
+  region:
+    description: "AWS region for the Bedrock backend; defaults to the AWS SDK chain."
+    default: ""
   features:
     description: "Cargo features used when building semdup from this action: default, or an extra feature list such as cuda."
     default: default
@@ -160,6 +163,7 @@ runs:
         INPUT_MODEL: ${{ inputs.model }}
         INPUT_BACKEND: ${{ inputs.backend }}
         INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_REGION: ${{ inputs.region }}
         GITHUB_TOKEN: ${{ github.token }}
         SEMDUP_DB: ${{ steps.prep.outputs.db_path }}
         SEMDUP_REPORT: ${{ steps.prep.outputs.report_path }}
@@ -210,6 +214,9 @@ runs:
         fi
         if [[ -n "$INPUT_PROVIDER" && "$INPUT_PROVIDER" != "auto" ]]; then
           args+=(--provider "$INPUT_PROVIDER")
+        fi
+        if [[ -n "$INPUT_REGION" ]]; then
+          args+=(--region "$INPUT_REGION")
         fi
         if [[ -n "$INPUT_ROOTS" ]]; then
           IFS=',' read -r -a roots <<< "$INPUT_ROOTS"

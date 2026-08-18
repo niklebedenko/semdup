@@ -4,6 +4,8 @@
 //! else (cache lookups, doc stripping, checkpointed DB writes) lives here so
 //! all backends behave identically.
 
+#[cfg(feature = "bedrock")]
+pub mod bedrock;
 #[cfg(feature = "onnx")]
 pub mod onnx;
 #[cfg(feature = "cuda")]

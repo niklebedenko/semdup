@@ -5,7 +5,9 @@ stuff.
 
 - **Robust.** Detects similarity by semantics, instead of grepping for token
   sequences. See `eval/README.md` for benchmark methodology and results.
-- **Local-first.** Embeddings run on your machine (CPU or CUDA). Free and private.
+- **Local-first.** The default model runs on your machine (CPU or CUDA); an
+  optional Bedrock backend makes Amazon Titan easy to use with standard AWS
+  credentials.
 - **Configurable sensitivity.** Adjust the sensitivity of matching (1.0 = only
   near-byte-identical matches; typically 0.5-0.95 is the useful range). You can have separate thresholds
   for emitting warnings vs errors.
@@ -36,6 +38,19 @@ semdup scan -t 0.95 -m 3   # threshold + 3-member minimum clusters
 semdup scan --show-bodies --top 1   # include source snippets for displayed clusters
 semdup diff --base origin/main --check # built-in PR review mode
 ```
+
+To use Amazon Titan Text Embeddings V2 through Bedrock, use the same setup
+command with the Bedrock backend:
+
+```bash
+semdup init --yes --backend bedrock --region us-east-1
+semdup scan
+```
+
+The default Titan model is `amazon.titan-embed-text-v2:0` with normalized
+1024-dimensional vectors. Use `--model` to select another Bedrock model. The
+Bedrock backend uses the AWS SDK credential chain and requires
+`bedrock:InvokeModel`.
 
 `semdup scan --show-bodies` syntax-highlights snippets when stdout is a
 terminal. Use `--color always` or `--color never` to override that.
@@ -162,7 +177,8 @@ CUDA matrix-multiply scan against an existing `semdup.sqlite` cache. It is not
 part of the runtime dependency set.
 
 Embedding the whole corpus cold is minutes on CPU and tens of seconds on a GPU;
-after that only changed units re-embed.
+after that only changed units re-embed. Bedrock embeddings are also cached by
+model and content hash, so reruns only invoke the model for changed code.
 
 Doc comments are stripped before embedding (shared doc boilerplate inflates
 similarity). Test functions are tagged at extraction and excluded with
@@ -190,6 +206,10 @@ corpus.
   JSONL protocol, for models without an ONNX export (`trust_remote_code`
   architectures, brand-new releases). Trial candidates with the sidecar;
   promote the winner to ONNX.
+- **bedrock**: invokes a hosted Amazon Titan embedding model through Amazon
+  Bedrock using the AWS SDK credential and region chain. The default model is
+  `amazon.titan-embed-text-v2:0`; set `backend = "bedrock"` in `semdup.toml`
+  or pass `--backend bedrock`.
 
 Vectors are cached by `(model id, content hash)`; swapping models means a
 cold cache and a fresh threshold sweep — by design, since every threshold is

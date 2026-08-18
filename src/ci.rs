@@ -318,6 +318,7 @@ mod tests {
             model: None,
             backend: None,
             provider: None,
+            region: None,
             model_dir: None,
             script: None,
         }

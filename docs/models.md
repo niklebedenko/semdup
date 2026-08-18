@@ -59,6 +59,31 @@ For arbitrary backends (API-based embedders, models without an ONNX path),
 use the python sidecar instead: `backend = "sidecar"` plus a script
 implementing the JSONL protocol in `sidecar/embedder.py`.
 
+## Amazon Titan through Bedrock
+
+The built-in Bedrock backend makes Titan Text Embeddings V2 available without
+installing Python packages or downloading model artifacts. Configure it with
+the AWS SDK's normal credential chain and a region:
+
+```toml
+[embed]
+backend = "bedrock"
+model = "amazon.titan-embed-text-v2:0"
+region = "us-east-1" # optional when AWS_REGION/default config is set
+```
+
+Or start a new repository directly with:
+
+```sh
+semdup init --yes --backend bedrock --region us-east-1
+```
+
+Titan V2 receives one function per Bedrock `InvokeModel` request and returns a
+normalized vector. The embedding cache remains local and keyed by model plus
+function-text hash, so existing vectors are reused and source changes are the
+only requests made on subsequent runs. The AWS principal needs
+`bedrock:InvokeModel` for the selected model and region.
+
 ## Quantized variants
 
 The ONNX backend separates the execution provider from the artifact. Current
