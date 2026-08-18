@@ -1,7 +1,7 @@
 //! semdup: embedding-based near-duplicate function detector.
 //!
 //! Pipeline: tree-sitter extraction -> SQLite unit+embedding cache
-//! -> embedding (built-in ONNX Runtime backend, or a python sidecar for
+//! -> embedding (built-in ONNX Runtime or Bedrock backends, or a python sidecar for
 //! arbitrary models) -> candidate search with exact scoring -> clustered report.
 //! Suppression: put `semdup:ignore` in a comment on, or up to three lines
 //! above, the function signature. Thresholds are per repo and per model:
@@ -47,12 +47,15 @@ struct EmbedArgs {
     /// Embedding model id (cache key for vectors).
     #[arg(long)]
     model: Option<String>,
-    /// "onnx" (built-in) or "sidecar" (external script).
+    /// "onnx" (built-in), "bedrock" (Amazon Bedrock), or "sidecar".
     #[arg(long)]
     backend: Option<String>,
     /// ONNX execution provider: auto, cpu, or cuda.
     #[arg(long)]
     provider: Option<String>,
+    /// AWS region for the Bedrock backend; defaults to the AWS SDK chain.
+    #[arg(long)]
+    region: Option<String>,
     /// ONNX backend: directory with model.onnx + tokenizer.json + semdup-model.json.
     #[arg(long)]
     model_dir: Option<PathBuf>,
@@ -69,6 +72,8 @@ enum Cmd {
         /// Accept all defaults without prompting.
         #[arg(long)]
         yes: bool,
+        #[command(flatten)]
+        embed: EmbedArgs,
     },
     /// Re-extract the configured roots and embed anything new or changed.
     Refresh {
@@ -250,6 +255,7 @@ fn default_model_key(args: Option<&EmbedArgs>, cfg: &Config) -> &'static str {
         .or(cfg.embed.backend.as_deref())
     {
         Some("sidecar") => config::DEFAULT_MODEL,
+        Some("bedrock") => config::DEFAULT_BEDROCK_MODEL,
         Some("onnx") | None if cfg!(feature = "onnx") => config::DEFAULT_HOSTED_MODEL,
         Some("onnx") | None => config::DEFAULT_MODEL,
         Some(_) => config::DEFAULT_HOSTED_MODEL,
@@ -265,7 +271,10 @@ fn resolve_model(cli: Option<String>, cfg: &Config, args: Option<&EmbedArgs>) ->
     }
     ModelSelection {
         key: default_model_key(args, cfg).to_string(),
-        backend_model: config::DEFAULT_MODEL.to_string(),
+        backend_model: match default_model_key(args, cfg) {
+            config::DEFAULT_BEDROCK_MODEL => config::DEFAULT_BEDROCK_MODEL.to_string(),
+            _ => config::DEFAULT_MODEL.to_string(),
+        },
     }
 }
 
@@ -281,6 +290,13 @@ fn make_backend(
         .backend
         .clone()
         .or_else(|| cfg.embed.backend.clone())
+        .or_else(|| {
+            if model.backend_model.starts_with("amazon.titan-embed-") {
+                Some("bedrock".into())
+            } else {
+                None
+            }
+        })
         .unwrap_or_else(|| {
             if cfg!(feature = "onnx") {
                 "onnx".into()
@@ -322,7 +338,14 @@ fn make_backend(
                 python: std::env::var("SEMDUP_PYTHON").unwrap_or_else(|_| "python3".into()),
             }))
         }
-        other => bail!("unknown backend '{other}' (expected onnx or sidecar)"),
+        #[cfg(feature = "bedrock")]
+        "bedrock" => Ok(Box::new(embed::bedrock::Bedrock::load(
+            model.backend_model.clone(),
+            args.region.clone().or_else(|| cfg.embed.region.clone()),
+        )?)),
+        #[cfg(not(feature = "bedrock"))]
+        "bedrock" => bail!("this build has no Bedrock backend (rebuild with --features bedrock)"),
+        other => bail!("unknown backend '{other}' (expected onnx, bedrock, or sidecar)"),
     }
 }
 
@@ -390,18 +413,19 @@ fn main() -> Result<()> {
     let conn = db::open(&db_path)?;
 
     match cli.cmd {
-        Cmd::Init { yes } => {
+        Cmd::Init { yes, embed: args } => {
             let dir = std::env::current_dir()?;
-            init::run(&dir, yes)?;
+            init::run(
+                &dir,
+                yes,
+                &init::EmbedSettings {
+                    model: args.model.as_deref(),
+                    backend: args.backend.as_deref(),
+                    region: args.region.as_deref(),
+                },
+            )?;
             // Re-discover: the wizard just wrote the config this run indexes with.
             let cfg = Config::discover(&dir)?;
-            let args = EmbedArgs {
-                model: None,
-                backend: None,
-                provider: None,
-                model_dir: None,
-                script: None,
-            };
             refresh(&conn, &cfg, &args)?;
             eprintln!("\nready — run `semdup scan` to see near-duplicate clusters");
         }

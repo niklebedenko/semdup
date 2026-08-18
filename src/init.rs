@@ -19,8 +19,14 @@ use crate::extract::SUPPORTED_EXTS;
 const DEFAULT_THRESHOLD: f32 = 0.72;
 const DEFAULT_MIN_LINES: usize = 8;
 
+pub struct EmbedSettings<'a> {
+    pub model: Option<&'a str>,
+    pub backend: Option<&'a str>,
+    pub region: Option<&'a str>,
+}
+
 /// Run the wizard and write `semdup.toml` into `dir`. Returns the config path.
-pub fn run(dir: &Path, yes: bool) -> Result<PathBuf> {
+pub fn run(dir: &Path, yes: bool, embed: &EmbedSettings<'_>) -> Result<PathBuf> {
     // Before any prompt, including the overwrite one below: a piped stdin
     // must get the clear error, not an invisible read.
     if !yes && !std::io::stdin().is_terminal() {
@@ -79,7 +85,7 @@ pub fn run(dir: &Path, yes: bool) -> Result<PathBuf> {
         confirm_default("exclude test code from scans?", true)?
     };
 
-    let toml = render_config(&roots, threshold, min_lines, skip_tests);
+    let toml = render_config(&roots, threshold, min_lines, skip_tests, embed);
     std::fs::write(&config_path, &toml)
         .with_context(|| format!("writing {}", config_path.display()))?;
     eprintln!("wrote {}", config_path.display());
@@ -89,7 +95,13 @@ pub fn run(dir: &Path, yes: bool) -> Result<PathBuf> {
     Ok(config_path)
 }
 
-fn render_config(roots: &[String], threshold: f32, min_lines: usize, skip_tests: bool) -> String {
+fn render_config(
+    roots: &[String],
+    threshold: f32,
+    min_lines: usize,
+    skip_tests: bool,
+    embed: &EmbedSettings<'_>,
+) -> String {
     // Hand-rendered rather than serialized: the file is user-facing and the
     // comments are part of the product.
     let roots_toml = roots
@@ -97,6 +109,25 @@ fn render_config(roots: &[String], threshold: f32, min_lines: usize, skip_tests:
         .map(|r| format!("{:?}", r))
         .collect::<Vec<_>>()
         .join(", ");
+    let embed_toml = if embed.model.is_some() || embed.backend.is_some() || embed.region.is_some() {
+        format!(
+            "\n[embed]\n{}{}{}",
+            embed
+                .model
+                .map(|model| format!("model = {model:?}\n"))
+                .unwrap_or_default(),
+            embed
+                .backend
+                .map(|backend| format!("backend = {backend:?}\n"))
+                .unwrap_or_default(),
+            embed
+                .region
+                .map(|region| format!("region = {region:?}\n"))
+                .unwrap_or_default(),
+        )
+    } else {
+        String::new()
+    };
     format!(
         "# semdup configuration — https://github.com/niklebedenko/semdup\n\
          # CLI flags override anything here; `semdup <cmd> --help` lists them.\n\
@@ -113,7 +144,7 @@ fn render_config(roots: &[String], threshold: f32, min_lines: usize, skip_tests:
          threshold = {threshold}\n\
          min_lines = {min_lines}\n\
          skip_tests = {skip_tests}\n\
-         # index = \"exact\" # exact | sparse | auto; sparse is approximate\n"
+         # index = \"exact\" # exact | sparse | auto; sparse is approximate{embed_toml}\n"
     )
 }
 
@@ -322,7 +353,17 @@ mod tests {
 
     #[test]
     fn rendered_config_parses_back() {
-        let toml = render_config(&["src".into(), "lib".into()], 0.72, 8, true);
+        let toml = render_config(
+            &["src".into(), "lib".into()],
+            0.72,
+            8,
+            true,
+            &EmbedSettings {
+                model: None,
+                backend: None,
+                region: None,
+            },
+        );
         let cfg: crate::config::Config = toml::from_str(&toml).unwrap();
         assert_eq!(
             cfg.extract.roots.unwrap(),
@@ -330,5 +371,23 @@ mod tests {
         );
         assert_eq!(cfg.scan.threshold, Some(0.72));
         assert_eq!(cfg.scan.skip_tests, Some(true));
+    }
+
+    #[test]
+    fn rendered_config_persists_embed_settings() {
+        let toml = render_config(
+            &["src".into()],
+            0.72,
+            8,
+            true,
+            &EmbedSettings {
+                model: None,
+                backend: Some("bedrock"),
+                region: Some("us-east-1"),
+            },
+        );
+        let cfg: crate::config::Config = toml::from_str(&toml).unwrap();
+        assert_eq!(cfg.embed.backend.as_deref(), Some("bedrock"));
+        assert_eq!(cfg.embed.region.as_deref(), Some("us-east-1"));
     }
 }
